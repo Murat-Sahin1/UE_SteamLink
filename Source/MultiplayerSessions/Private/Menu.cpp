@@ -4,6 +4,8 @@
 
 #include "MultiplayerSessionsSubsystem.h"
 #include "Components/Button.h"
+#include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
 
 void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch)
 {
@@ -35,10 +37,10 @@ void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch)
 	}
 }
 
-void UMenu::OnLevelRemovedFromWorld(ULevel* InLevel, UWorld* InWorld)
+void UMenu::NativeDestruct()
 {
 	MenuTearDown();
-	Super::OnLevelRemovedFromWorld(InLevel, InWorld);
+	Super::NativeDestruct();
 }
 
 bool UMenu::Initialize()
@@ -100,7 +102,7 @@ void UMenu::JoinButtonClicked()
 
 void UMenu::MenuTearDown()
 {
-	RemoveFromParent();
+	// RemoveFromParent();
 	UWorld* World = GetWorld();
 	if (World)
 	{
