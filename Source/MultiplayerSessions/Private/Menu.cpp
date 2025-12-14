@@ -6,6 +6,7 @@
 #include "Components/Button.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
+#include "OnlineSessionSettings.h"
 
 void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch)
 {
@@ -34,6 +35,16 @@ void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch)
 	if (GameInstance)
 	{
 		MultiplayerSessionsSubsystem = GameInstance->GetSubsystem<UMultiplayerSessionsSubsystem>();
+	}
+
+	if (MultiplayerSessionsSubsystem)
+	{
+		MultiplayerSessionsSubsystem->MultiplayerOnCreateSessionComplete.AddDynamic(this, &ThisClass::OnCreateSession);
+		MultiplayerSessionsSubsystem->MultiplayerOnFindSessionsComplete.AddUObject(this, &ThisClass::OnFindSessions);
+		MultiplayerSessionsSubsystem->MultiplayerOnJoinSessionComplete.AddUObject(this, &ThisClass::OnJoinSession);
+		MultiplayerSessionsSubsystem->MultiplayerOnDestroySessionComplete.
+		                              AddDynamic(this, &ThisClass::OnDestroySession);
+		MultiplayerSessionsSubsystem->MultiplayerOnStartSessionComplete.AddDynamic(this, &ThisClass::OnStartSession);
 	}
 }
 
@@ -64,39 +75,131 @@ bool UMenu::Initialize()
 	return true;
 }
 
-void UMenu::HostButtonClicked()
+void UMenu::OnCreateSession(bool bWasSuccessful)
 {
-	if (GEngine)
+	if (bWasSuccessful)
 	{
-		GEngine->AddOnScreenDebugMessage(
-			-1,
-			15.f,
-			FColor::Yellow,
-			FString(TEXT("Host Button Clicked!"))
-		);
-	}
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(
+				-1,
+				15.f,
+				FColor::Orange,
+				FString(TEXT("Session created successfully!"))
+			);
+		}
 
-	if (MultiplayerSessionsSubsystem)
-	{
-		MultiplayerSessionsSubsystem->CreateSession(NumPublicConnections, MatchType);
 		UWorld* World = GetWorld();
 		if (World)
 		{
 			World->ServerTravel("/Game/ThirdPerson/Maps/Lobby?listen");
 		}
 	}
+	else
+	{
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(
+				-1,
+				15.f,
+				FColor::Red,
+				FString(TEXT("Failed to create session!"))
+			);
+		}
+	}
+}
+
+void UMenu::OnFindSessions(const TArray<FOnlineSessionSearchResult>& SessionResults, bool bWasSuccessful)
+{
+	if (MultiplayerSessionsSubsystem == nullptr)
+	{
+		return;
+	}
+
+	if (bWasSuccessful)
+	{
+		for (auto Result : SessionResults)
+		{
+			FString SettingsValue;
+			FString Id = Result.GetSessionIdStr();
+			FString User = Result.Session.OwningUserName;
+
+			Result.Session.SessionSettings.Get(FName("MatchType"), SettingsValue);
+
+			if (SettingsValue == MatchType)
+			{
+				PrintDebugMessage(
+					FString::Printf(
+						TEXT("Found Session Details: ID: %s, Host User: %s"), *Id, *User),
+					false);
+
+				// Steam complains about bUseLobbiesIfAvailable and bUsesPresence must match
+				// so changing these in the results, which should NOT be needed!
+				// Joining fails otherwise, though, so doing it for now.
+				Result.Session.SessionSettings.bUseLobbiesIfAvailable = true;
+				Result.Session.SessionSettings.bUsesPresence = true;
+
+				MultiplayerSessionsSubsystem->JoinSession(Result);
+				return;
+			}
+		}
+	}
+	else
+	{
+		if (GEngine)
+		{
+			PrintDebugMessage(
+				FString(TEXT("Find Sessions Failed!")),
+				true);
+		}
+	}
+}
+
+void UMenu::OnJoinSession(EOnJoinSessionCompleteResult::Type Result)
+{
+	if (Result == EOnJoinSessionCompleteResult::Success)
+	{
+		if (MultiplayerSessionsSubsystem == nullptr)
+		{
+			return;
+		}
+
+		FString Address = MultiplayerSessionsSubsystem->GetCachedConnectAddress();
+		PrintDebugMessage(
+			FString::Printf(TEXT("Found Session's Conntect String: %s"), *Address),
+			false);
+
+		APlayerController* FirstLocalPlayerController = GetGameInstance()->GetFirstLocalPlayerController();
+		if (FirstLocalPlayerController)
+		{
+			FirstLocalPlayerController->ClientTravel(Address, TRAVEL_Absolute);
+		}
+	}
+}
+
+void UMenu::OnDestroySession(bool bWasSuccessful)
+{
+}
+
+void UMenu::OnStartSession(bool bWasSuccessful)
+{
+}
+
+void UMenu::HostButtonClicked()
+{
+	if (MultiplayerSessionsSubsystem)
+	{
+		PrintDebugMessage(FString(TEXT("Host Button Clicked!")), false, FColor::Yellow);
+		MultiplayerSessionsSubsystem->CreateSession(NumPublicConnections, MatchType);
+	}
 }
 
 void UMenu::JoinButtonClicked()
 {
-	if (GEngine)
+	if (MultiplayerSessionsSubsystem)
 	{
-		GEngine->AddOnScreenDebugMessage(
-			-1,
-			15.f,
-			FColor::Yellow,
-			FString(TEXT("Join Button Clicked!"))
-		);
+		PrintDebugMessage(FString(TEXT("Join Button Clicked!")), false, FColor::Yellow);
+		MultiplayerSessionsSubsystem->FindSessions(10000);
 	}
 }
 
@@ -113,5 +216,20 @@ void UMenu::MenuTearDown()
 			PlayerController->SetInputMode(InputModeGameOnly);
 			PlayerController->SetShowMouseCursor(false);
 		}
+	}
+}
+
+/* UTILITIES */
+
+void UMenu::PrintDebugMessage(const FString& Message, bool isError, const FColor Color)
+{
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			-1,
+			15.f,
+			isError ? FColor::Red : Color,
+			Message
+		);
 	}
 }
