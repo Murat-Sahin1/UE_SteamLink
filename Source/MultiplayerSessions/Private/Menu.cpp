@@ -79,15 +79,15 @@ void UMenu::OnCreateSession(bool bWasSuccessful)
 {
 	if (bWasSuccessful)
 	{
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(
-				-1,
-				15.f,
-				FColor::Orange,
-				FString(TEXT("Session created successfully!"))
-			);
-		}
+		// if (GEngine)
+		// {
+		// 	GEngine->AddOnScreenDebugMessage(
+		// 		-1,
+		// 		15.f,
+		// 		FColor::Orange,
+		// 		FString(TEXT("Session created successfully!"))
+		// 	);
+		// }
 
 		UWorld* World = GetWorld();
 		if (World)
