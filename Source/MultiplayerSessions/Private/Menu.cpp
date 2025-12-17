@@ -8,8 +8,9 @@
 #include "Engine/GameInstance.h"
 #include "OnlineSessionSettings.h"
 
-void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch)
+void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FString LobbyPath)
 {
+	PathToLobby = LobbyPath + "?listen";
 	NumPublicConnections = NumberOfPublicConnections;
 	MatchType = TypeOfMatch;
 	AddToViewport();
@@ -79,33 +80,17 @@ void UMenu::OnCreateSession(bool bWasSuccessful)
 {
 	if (bWasSuccessful)
 	{
-		// if (GEngine)
-		// {
-		// 	GEngine->AddOnScreenDebugMessage(
-		// 		-1,
-		// 		15.f,
-		// 		FColor::Orange,
-		// 		FString(TEXT("Session created successfully!"))
-		// 	);
-		// }
+		PrintDebugMessage(FString(TEXT("Session created successfully!")), false, FColor::Orange);
 
 		UWorld* World = GetWorld();
 		if (World)
 		{
-			World->ServerTravel("/Game/ThirdPerson/Maps/Lobby?listen");
+			World->ServerTravel(PathToLobby);
 		}
 	}
 	else
 	{
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(
-				-1,
-				15.f,
-				FColor::Red,
-				FString(TEXT("Failed to create session!"))
-			);
-		}
+		PrintDebugMessage(FString(TEXT("Failed to create session!")), true);
 	}
 }
 
@@ -183,6 +168,14 @@ void UMenu::OnDestroySession(bool bWasSuccessful)
 
 void UMenu::OnStartSession(bool bWasSuccessful)
 {
+	if (bWasSuccessful)
+	{
+		PrintDebugMessage(FString(TEXT("Game is on!")), false, FColor::Emerald);
+	}
+	else
+	{
+		PrintDebugMessage(FString(TEXT("Game couldn't start.")), true);
+	}
 }
 
 void UMenu::HostButtonClicked()

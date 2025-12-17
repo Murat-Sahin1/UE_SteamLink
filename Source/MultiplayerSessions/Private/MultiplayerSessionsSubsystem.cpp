@@ -159,6 +159,19 @@ void UMultiplayerSessionsSubsystem::DestroySession()
 
 void UMultiplayerSessionsSubsystem::StartSession()
 {
+	if (!SessionInterface.IsValid())
+	{
+		return;
+	}
+
+	StartSessionCompleteDelegateHandle = SessionInterface->
+		AddOnStartSessionCompleteDelegate_Handle(StartSessionCompleteDelegate);
+
+	const bool bWasSuccessful = SessionInterface->StartSession(NAME_GameSession);
+	if (!bWasSuccessful)
+	{
+		SessionInterface->ClearOnStartSessionCompleteDelegate_Handle(StartSessionCompleteDelegateHandle);
+	}
 }
 
 void UMultiplayerSessionsSubsystem::Deinitialize()
@@ -215,6 +228,12 @@ void UMultiplayerSessionsSubsystem::OnDestroySessionComplete(FName SessionName, 
 
 void UMultiplayerSessionsSubsystem::OnStartSessionComplete(FName SessionName, bool bWasSuccessful)
 {
+	if (SessionInterface)
+	{
+		SessionInterface->ClearOnStartSessionCompleteDelegate_Handle(StartSessionCompleteDelegateHandle);
+	}
+
+	MultiplayerOnStartSessionComplete.Broadcast(bWasSuccessful);
 }
 
 /* UTILITIES */

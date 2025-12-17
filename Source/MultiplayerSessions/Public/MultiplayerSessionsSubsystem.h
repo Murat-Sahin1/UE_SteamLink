@@ -43,7 +43,7 @@ public:
 
 	// CUSTOM DELEGATES
 	// -----------------------
-	// Our own custom delegates for the Menu class to bind callbacks to
+	// Our own custom delegates, for the Menu class to bind callbacks to
 	FMultiplayerOnCreateSessionComplete MultiplayerOnCreateSessionComplete;
 	FMultiplayerOnFindSessionsComplete MultiplayerOnFindSessionsComplete;
 	FMultiplayerOnJoinSessionComplete MultiplayerOnJoinSessionComplete;
@@ -93,6 +93,7 @@ private:
 	FOnDestroySessionCompleteDelegate DestroySessionCompleteDelegate;
 	FDelegateHandle DestroySessionCompleteDelegateHandle;
 	FOnStartSessionCompleteDelegate StartSessionCompleteDelegate;
+	FDelegateHandle StartSessionCompleteDelegateHandle;
 
 	// UTILITY FUNCTIONS
 	void PrintDebugMessage(const FString& Message, bool isError);
