@@ -95,6 +95,10 @@ private:
 	FOnStartSessionCompleteDelegate StartSessionCompleteDelegate;
 	FDelegateHandle StartSessionCompleteDelegateHandle;
 
+	bool bCreateSessionOnDestroy{false};
+	int32 LastNumPublicConnections;
+	FString LastMatchType;
+
 	// UTILITY FUNCTIONS
 	void PrintDebugMessage(const FString& Message, bool isError);
 };
