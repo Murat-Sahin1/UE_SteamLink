@@ -164,6 +164,8 @@ void UMenu::OnJoinSession(EOnJoinSessionCompleteResult::Type Result)
 
 void UMenu::OnDestroySession(bool bWasSuccessful)
 {
+	if (bWasSuccessful)
+		PrintDebugMessage(FString(TEXT("Destroyed a Session!")), false, FColor::Yellow);
 }
 
 void UMenu::OnStartSession(bool bWasSuccessful)
