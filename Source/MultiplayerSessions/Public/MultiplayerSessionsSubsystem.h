@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Interfaces/OnlineSessionInterface.h"
+#include "MultiplayerSessionsTypes.h"
 #include "MultiplayerSessionsSubsystem.generated.h"
 
 // Declaring our own custom delegates for the Menu class to bind callbacks to
@@ -17,9 +18,50 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnFindSessionsComplete,
 DECLARE_MULTICAST_DELEGATE_OneParam(FMultiplayerOnJoinSessionComplete,
                                     EOnJoinSessionCompleteResult::Type);
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnDestroySessionComplete, bool, bWasSuccessful);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnDestroySessionComplete,
+                                            bool, bWasSuccessful);
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnStartSessionComplete, bool, bWasSuccessful);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnStartSessionComplete,
+                                            bool, bWasSuccessful);
+
+// LOBBY SYSTEM DELEGATES
+// ----------------------
+
+// Lobby creation result
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnLobbyCreated,
+                                             bool, bWasSuccessful,
+                                             const FLobbyInfo&, LobbyInfo);
+
+// Lobby search result
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnLobbyListUpdated,
+                                             const TArray<FLobbyInfo>&, Lobbies,
+                                             bool, bWasSuccessful);
+
+// Lobby join attempt result
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnLobbyJoinComplete,
+                                            ELobbyJoinResult, Result);
+
+// Lobby player joined event
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnPlayerJoinedLobby,
+                                            const FLobbyPlayerInfo&, PlayerInfo);
+
+// Lobby player left event
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnPlayerLeftLobby,
+                                             const FLobbyPlayerInfo&, PlayerInfo,
+                                             ELobbyLeaveReason, Reason);
+
+// Lobby local player kicked event
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnKickedFromLobby,
+                                            FString, Reason);
+
+// Lobby host changed event
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnHostMigration,
+                                             const FLobbyPlayerInfo&, OldHost,
+                                             const FLobbyPlayerInfo&, NewHost);
+
+// Lobby settings modified event
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnLobbySettingsUpdated,
+                                            const FLobbyInfo&, UpdatedLobbyInfo);
 
 /**
  * 
@@ -41,6 +83,10 @@ public:
 	void DestroySession();
 	void StartSession();
 
+	// LOBBY HANDLERS
+	// -----------------------
+	void CreateLobby(const FLobbySettings& Settings);
+
 	// CUSTOM DELEGATES
 	// -----------------------
 	// Our own custom delegates, for the Menu class to bind callbacks to
@@ -49,6 +95,17 @@ public:
 	FMultiplayerOnJoinSessionComplete MultiplayerOnJoinSessionComplete;
 	FMultiplayerOnDestroySessionComplete MultiplayerOnDestroySessionComplete;
 	FMultiplayerOnStartSessionComplete MultiplayerOnStartSessionComplete;
+
+	// LOBBY DELEGATES
+	// ----------------------
+	FMultiplayerOnLobbyCreated MultiplayerOnLobbyCreated;
+	FMultiplayerOnLobbyListUpdated MultiplayerOnLobbyListUpdated;
+	FMultiplayerOnLobbyJoinComplete MultiplayerOnLobbyJoinComplete;
+	FMultiplayerOnPlayerJoinedLobby MultiplayerOnPlayerJoinedLobby;
+	FMultiplayerOnPlayerLeftLobby MultiplayerOnPlayerLeftLobby;
+	FMultiplayerOnKickedFromLobby MultiplayerOnKickedFromLobby;
+	FMultiplayerOnHostMigration MultiplayerOnHostMigration;
+	FMultiplayerOnLobbySettingsUpdated MultiplayerOnLobbySettingsUpdated;
 
 	// GETTER FUNCTIONS
 	// -----------------------
@@ -95,10 +152,20 @@ private:
 	FOnStartSessionCompleteDelegate StartSessionCompleteDelegate;
 	FDelegateHandle StartSessionCompleteDelegateHandle;
 
+	// LOBBY STATE
+	// ------------------------
+	bool bCreateLobbyOnDestroy{false};
+	FLobbySettings PendingLobbySettings;
+	bool bIsLobbyOperation{false};
+
 	bool bCreateSessionOnDestroy{false};
 	int32 LastNumPublicConnections;
 	FString LastMatchType;
 
 	// UTILITY FUNCTIONS
 	void PrintDebugMessage(const FString& Message, bool isError);
+
+	// Lobby Utilities
+	FString HashPassword(const FString& Password);
+	FLobbyInfo CreateLobbyInfoFromSession() const;
 };

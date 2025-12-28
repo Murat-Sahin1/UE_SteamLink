@@ -6,6 +6,7 @@
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
 #include "OnlineSessionSettings.h"
+#include "SkeletalRenderPublic.h"
 #include "Engine/LocalPlayer.h"
 #include "Online/OnlineSessionNames.h"
 
@@ -96,6 +97,75 @@ void UMultiplayerSessionsSubsystem::CreateSession(int32 NumPublicConntections, F
 	if (!isCreateSessionSuccessful)
 	{
 		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
+	}
+}
+
+// Extending functionality to lobbies, creation of lobbies implemented.
+void UMultiplayerSessionsSubsystem::CreateLobby(const FLobbySettings& LobbySettings)
+{
+	if (!SessionInterface.IsValid())
+	{
+		MultiplayerOnLobbyCreated.Broadcast(false, FLobbyInfo());
+		return;
+	}
+
+	auto ExistingSession = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (ExistingSession != nullptr)
+	{
+		bCreateLobbyOnDestroy = true;
+		PendingLobbySettings = LobbySettings;
+		DestroySession();
+		return;
+	}
+
+	bIsLobbyOperation = true;
+	PendingLobbySettings = LobbySettings;
+
+	// Register Delegate
+	CreateSessionCompleteDelegateHandle = SessionInterface->AddOnCreateSessionCompleteDelegate_Handle(
+		CreateSessionCompleteDelegate);
+
+	// Configure session settings
+	LastSessionSettings = MakeShareable(new FOnlineSessionSettings());
+	LastSessionSettings->bIsLANMatch = Online::GetSubsystem(GetWorld())->GetSubsystemName() == "NULL";
+	LastSessionSettings->NumPublicConnections = LobbySettings.MaxPlayers;
+	LastSessionSettings->bAllowJoinInProgress = true;
+	LastSessionSettings->bShouldAdvertise = true;
+	LastSessionSettings->bUsesPresence = false;
+	LastSessionSettings->bAllowJoinViaPresence = false;
+	LastSessionSettings->bUseLobbiesIfAvailable = true;
+
+	// Lobby Metadata
+	LastSessionSettings->Set(FName("LobbyIsPublic"), LobbySettings.bIsPublic,
+	                         EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+
+	// Store password hash for private lobbies
+	if (!LobbySettings.bIsPublic && !LobbySettings.Password.IsEmpty())
+	{
+		FString PasswordHash = HashPassword(LobbySettings.Password);
+		LastSessionSettings->Set(FName("PasswordHash"), PasswordHash,
+		                         EOnlineDataAdvertisementType::ViaOnlineService);
+	}
+
+	// Store host name
+	FString HostName = TEXT("Unknown Host");
+	if (const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController())
+	{
+		HostName = LocalPlayer->GetNickname();
+	}
+	LastSessionSettings->Set(FName("HostName"), HostName,
+	                         EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+
+	// Create Lobby
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	bool bSuccess = SessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(),
+	                                                NAME_GameSession, *LastSessionSettings);
+
+	if (!bSuccess)
+	{
+		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
+		bIsLobbyOperation = false;
+		MultiplayerOnLobbyCreated.Broadcast(false, FLobbyInfo());
 	}
 }
 
