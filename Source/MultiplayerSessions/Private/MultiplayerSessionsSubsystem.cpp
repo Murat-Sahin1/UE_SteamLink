@@ -6,7 +6,6 @@
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
 #include "OnlineSessionSettings.h"
-#include "SkeletalRenderPublic.h"
 #include "Engine/LocalPlayer.h"
 #include "Online/OnlineSessionNames.h"
 
@@ -65,8 +64,8 @@ void UMultiplayerSessionsSubsystem::CreateSession(int32 NumPublicConntections, F
 		bCreateSessionOnDestroy = true;
 		LastNumPublicConnections = NumPublicConntections;
 		LastMatchType = MatchType;
-
 		DestroySession();
+		return;
 	}
 
 	// Store the delegate in a FDelegateHandle 
@@ -118,6 +117,13 @@ void UMultiplayerSessionsSubsystem::CreateLobby(const FLobbySettings& LobbySetti
 		return;
 	}
 
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (!LocalPlayer)
+	{
+		MultiplayerOnLobbyCreated.Broadcast(false, FLobbyInfo());
+		return;
+	}
+
 	bIsLobbyOperation = true;
 	PendingLobbySettings = LobbySettings;
 
@@ -147,17 +153,12 @@ void UMultiplayerSessionsSubsystem::CreateLobby(const FLobbySettings& LobbySetti
 		                         EOnlineDataAdvertisementType::ViaOnlineService);
 	}
 
-	// Store host name
-	FString HostName = TEXT("Unknown Host");
-	if (const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController())
-	{
-		HostName = LocalPlayer->GetNickname();
-	}
+	// Store host name into metadata
+	FString HostName = LocalPlayer->GetNickname();
 	LastSessionSettings->Set(FName("HostName"), HostName,
 	                         EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 
 	// Create Lobby
-	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
 	bool bSuccess = SessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(),
 	                                                NAME_GameSession, *LastSessionSettings);
 
@@ -275,7 +276,25 @@ void UMultiplayerSessionsSubsystem::OnCreateSessionComplete(FName SessionName, b
 		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
 	}
 
-	MultiplayerOnCreateSessionComplete.Broadcast(bWasSuccessful);
+	// Handle lobby creation vs session creation
+	if (bIsLobbyOperation)
+	{
+		bIsLobbyOperation = false;
+		if (bWasSuccessful)
+		{
+			FLobbyInfo LobbyInfo = CreateLobbyInfoFromSession();
+			MultiplayerOnLobbyCreated.Broadcast(true, LobbyInfo);
+		}
+		else
+		{
+			MultiplayerOnLobbyCreated.Broadcast(false, FLobbyInfo());
+		}
+	}
+	else
+	{
+		// Original behavior for CreateSession
+		MultiplayerOnCreateSessionComplete.Broadcast(bWasSuccessful);
+	}
 }
 
 void UMultiplayerSessionsSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
@@ -318,10 +337,21 @@ void UMultiplayerSessionsSubsystem::OnDestroySessionComplete(FName SessionName, 
 		SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteDelegateHandle);
 	}
 
-	if (bWasSuccessful && bCreateSessionOnDestroy)
+	if (bWasSuccessful)
 	{
-		bCreateSessionOnDestroy = false;
-		CreateSession(LastNumPublicConnections, LastMatchType);
+		if (bCreateSessionOnDestroy)
+		{
+			bCreateSessionOnDestroy = false;
+			CreateSession(LastNumPublicConnections, LastMatchType);
+			return;
+		}
+
+		if (bCreateLobbyOnDestroy)
+		{
+			bCreateLobbyOnDestroy = false;
+			CreateLobby(PendingLobbySettings);
+			return;
+		}
 	}
 
 	MultiplayerOnDestroySessionComplete.Broadcast(bWasSuccessful);
@@ -350,4 +380,40 @@ void UMultiplayerSessionsSubsystem::PrintDebugMessage(const FString& Message, bo
 			Message
 		);
 	}
+}
+
+/* LOBBY UTILITIES */
+FString UMultiplayerSessionsSubsystem::HashPassword(const FString& Password) const
+{
+	// Simple hash using MD5 - sufficient for lobby passwords
+	return FMD5::HashAnsiString(*Password);
+}
+
+FLobbyInfo UMultiplayerSessionsSubsystem::CreateLobbyInfoFromSession() const
+{
+	FLobbyInfo Info;
+
+	if (!SessionInterface.IsValid())
+	{
+		return Info;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (!Session)
+	{
+		return Info;
+	}
+
+	Info.LobbyId = Session->GetSessionIdStr();
+	Info.MaxPlayerCount = Session->SessionSettings.NumPublicConnections;
+	Info.CurrentPlayerCount = Info.MaxPlayerCount - Session->NumOpenPublicConnections;
+
+	// Retrieve stored metadata
+	Session->SessionSettings.Get(FName("HostName"), Info.HostName);
+	Session->SessionSettings.Get(FName("LobbyIsPublic"), Info.bIsPublic);
+
+	// Host doesn't have ping to self
+	Info.PingInMs = -1;
+
+	return Info;
 }

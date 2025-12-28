@@ -166,6 +166,6 @@ private:
 	void PrintDebugMessage(const FString& Message, bool isError);
 
 	// Lobby Utilities
-	FString HashPassword(const FString& Password);
+	FString HashPassword(const FString& Password) const;
 	FLobbyInfo CreateLobbyInfoFromSession() const;
 };
