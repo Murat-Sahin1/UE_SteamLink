@@ -170,6 +170,43 @@ void UMultiplayerSessionsSubsystem::CreateLobby(const FLobbySettings& LobbySetti
 	}
 }
 
+void UMultiplayerSessionsSubsystem::FindLobbies(int32 MaxResult)
+{
+	if (!SessionInterface.IsValid())
+	{
+		MultiplayerOnLobbyListUpdated.Broadcast(TArray<FLobbyInfo>(), false);
+		return;
+	}
+
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (!LocalPlayer)
+	{
+		MultiplayerOnLobbyListUpdated.Broadcast(TArray<FLobbyInfo>(), false);
+		return;
+	}
+
+	bIsLobbySearch = true;
+
+	FindSessionsCompleteDelegateHandle = SessionInterface->AddOnFindSessionsCompleteDelegate_Handle(
+		FindSessionsCompleteDelegate);
+
+	LastSessionSearch = MakeShareable(new FOnlineSessionSearch());
+	LastSessionSearch->MaxSearchResults = MaxResult;
+	LastSessionSearch->bIsLanQuery = Online::GetSubsystem(GetWorld())->GetSubsystemName() == "NULL";
+	LastSessionSearch->QuerySettings.Set(SEARCH_LOBBIES, true, EOnlineComparisonOp::Equals);
+	// Dont search presence, global search
+
+	bool bSuccess = SessionInterface->FindSessions(*LocalPlayer->GetPreferredUniqueNetId(),
+	                                               LastSessionSearch.ToSharedRef());
+
+	if (!bSuccess)
+	{
+		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
+		bIsLobbySearch = false;
+		MultiplayerOnLobbyListUpdated.Broadcast(TArray<FLobbyInfo>(), false);
+	}
+}
+
 void UMultiplayerSessionsSubsystem::FindSessions(int32 MaxSearchResults)
 {
 	// Check if the Session Interface is valid
@@ -304,13 +341,34 @@ void UMultiplayerSessionsSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
 		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
 	}
 
-	if (LastSessionSearch->SearchResults.Num() <= 0)
+	if (bIsLobbySearch)
 	{
-		MultiplayerOnFindSessionsComplete.Broadcast(TArray<FOnlineSessionSearchResult>(), false);
-		return;
-	}
+		bIsLobbySearch = false;
+		if (!bWasSuccessful || !LastSessionSearch.IsValid() || LastSessionSearch->SearchResults.Num() <= 0)
+		{
+			MultiplayerOnLobbyListUpdated.Broadcast(TArray<FLobbyInfo>(), false);
+			return;
+		}
 
-	MultiplayerOnFindSessionsComplete.Broadcast(LastSessionSearch->SearchResults, true);
+		// Convert to FLobbyInfo array
+		TArray<FLobbyInfo> Lobbies;
+
+		for (const FOnlineSessionSearchResult& Result : LastSessionSearch->SearchResults)
+		{
+			Lobbies.Add(ConvertSearchResultToLobbyInfo(Result));
+		}
+		MultiplayerOnLobbyListUpdated.Broadcast(Lobbies, true);
+	}
+	else
+	{
+		if (LastSessionSearch->SearchResults.Num() <= 0)
+		{
+			MultiplayerOnFindSessionsComplete.Broadcast(TArray<FOnlineSessionSearchResult>(), false);
+			return;
+		}
+
+		MultiplayerOnFindSessionsComplete.Broadcast(LastSessionSearch->SearchResults, true);
+	}
 }
 
 void UMultiplayerSessionsSubsystem::OnJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result)
@@ -416,4 +474,20 @@ FLobbyInfo UMultiplayerSessionsSubsystem::CreateLobbyInfoFromSession() const
 	Info.PingInMs = -1;
 
 	return Info;
+}
+
+FLobbyInfo UMultiplayerSessionsSubsystem::ConvertSearchResultToLobbyInfo(
+	const FOnlineSessionSearchResult& SearchResult) const
+{
+	FLobbyInfo LobbyInfo;
+
+	LobbyInfo.LobbyId = SearchResult.GetSessionIdStr();
+	LobbyInfo.MaxPlayerCount = SearchResult.Session.SessionSettings.NumPublicConnections;
+	LobbyInfo.CurrentPlayerCount = LobbyInfo.MaxPlayerCount - SearchResult.Session.NumOpenPublicConnections;
+	LobbyInfo.PingInMs = SearchResult.PingInMs;
+
+	SearchResult.Session.SessionSettings.Get(FName("HostName"), LobbyInfo.HostName);
+	SearchResult.Session.SessionSettings.Get(FName("LobbyIsPublic"), LobbyInfo.bIsPublic);
+
+	return LobbyInfo;
 }

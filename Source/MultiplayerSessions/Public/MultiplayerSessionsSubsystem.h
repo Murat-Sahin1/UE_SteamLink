@@ -86,6 +86,7 @@ public:
 	// LOBBY HANDLERS
 	// -----------------------
 	void CreateLobby(const FLobbySettings& Settings);
+	void FindLobbies(int32 MaxResult = 100);
 
 	// CUSTOM DELEGATES
 	// -----------------------
@@ -152,20 +153,26 @@ private:
 	FOnStartSessionCompleteDelegate StartSessionCompleteDelegate;
 	FDelegateHandle StartSessionCompleteDelegateHandle;
 
+	// SESSION STATE
+	// Soon will be deprecated
+	// ------------------------
+	bool bCreateSessionOnDestroy{false};
+	int32 LastNumPublicConnections;
+	FString LastMatchType;
+
 	// LOBBY STATE
 	// ------------------------
 	bool bCreateLobbyOnDestroy{false};
 	FLobbySettings PendingLobbySettings;
 	bool bIsLobbyOperation{false};
-
-	bool bCreateSessionOnDestroy{false};
-	int32 LastNumPublicConnections;
-	FString LastMatchType;
+	bool bIsLobbySearch{false};
 
 	// UTILITY FUNCTIONS
 	void PrintDebugMessage(const FString& Message, bool isError);
 
 	// Lobby Utilities
+	// ------------------------
 	FString HashPassword(const FString& Password) const;
 	FLobbyInfo CreateLobbyInfoFromSession() const;
+	FLobbyInfo ConvertSearchResultToLobbyInfo(const FOnlineSessionSearchResult& SearchResult) const;
 };
