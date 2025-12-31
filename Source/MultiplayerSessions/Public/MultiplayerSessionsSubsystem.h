@@ -74,15 +74,6 @@ class MULTIPLAYERSESSIONS_API UMultiplayerSessionsSubsystem : public UGameInstan
 public:
 	UMultiplayerSessionsSubsystem();
 
-	// SESSION HANDLERS
-	// ------------------------
-	// These will be called outside the Multiplayer Sessions Subsystem
-	void CreateSession(int32 NumPublicConntections, FString MatchType);
-	void FindSessions(int32 MaxSearchResults);
-	void JoinSession(const FOnlineSessionSearchResult& SessionResult);
-	void DestroySession();
-	void StartSession();
-
 	// LOBBY HANDLERS
 	// -----------------------
 	void CreateLobby(const FLobbySettings& Settings);
@@ -109,10 +100,28 @@ public:
 	FMultiplayerOnHostMigration MultiplayerOnHostMigration;
 	FMultiplayerOnLobbySettingsUpdated MultiplayerOnLobbySettingsUpdated;
 
+	// LOBBY QUERY METHODS
+	// ------------------------
+	FLobbyInfo GetCurrentLobbyInfo() const;
+	TArray<FLobbyPlayerInfo> GetLobbyPlayers() const;
+	bool IsLobbyHost() const;
+	bool IsInLobby() const;
+	void LeaveLobby();
+
 	// GETTER FUNCTIONS
 	// -----------------------
 	// Getter functions for the Menu Class
 	const FString& GetCachedConnectAddress() const { return CachedConnectAddress; }
+
+	/* DEPRECATED */
+	// SESSION HANDLERS
+	// ------------------------
+	// These will be called outside the Multiplayer Sessions Subsystem
+	void CreateSession(int32 NumPublicConntections, FString MatchType);
+	void FindSessions(int32 MaxSearchResults);
+	void JoinSession(const FOnlineSessionSearchResult& SessionResult);
+	void DestroySession();
+	void StartSession();
 
 protected:
 	// LIFETIME OVERRIDES

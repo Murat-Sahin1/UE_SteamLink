@@ -241,7 +241,7 @@ void UMultiplayerSessionsSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-/* COMMON CALLBACKS */
+/* LOBBY CALLBACKS */
 /* Callbacks called by the registered delegates of Session Interface */
 
 void UMultiplayerSessionsSubsystem::OnCreateSessionComplete(FName SessionName, bool bWasSuccessful)
@@ -398,6 +398,189 @@ void UMultiplayerSessionsSubsystem::OnStartSessionComplete(FName SessionName, bo
 	MultiplayerOnStartSessionComplete.Broadcast(bWasSuccessful);
 }
 
+/* LOBBY UTILITIES */
+FString UMultiplayerSessionsSubsystem::HashPassword(const FString& Password) const
+{
+	// Simple hash using MD5 - sufficient for lobby passwords
+	return FMD5::HashAnsiString(*Password);
+}
+
+bool UMultiplayerSessionsSubsystem::ValidatePassword(const FString& Password, const FString& StoredHash) const
+{
+	if (StoredHash.IsEmpty())
+	{
+		return true;
+	}
+
+	FString InputHash = HashPassword(Password);
+	return InputHash.Equals(StoredHash);
+}
+
+void UMultiplayerSessionsSubsystem::PrintDebugMessage(const FString& Message, bool isError)
+{
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			-1,
+			15.f,
+			isError ? FColor::Red : FColor::Green,
+			Message
+		);
+	}
+}
+
+/* LOBBY MAPPERS */
+
+FLobbyInfo UMultiplayerSessionsSubsystem::CreateLobbyInfoFromSession() const
+{
+	FLobbyInfo Info;
+
+	if (!SessionInterface.IsValid())
+	{
+		return Info;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (!Session)
+	{
+		return Info;
+	}
+
+	Info.LobbyId = Session->GetSessionIdStr();
+	Info.MaxPlayerCount = Session->SessionSettings.NumPublicConnections;
+	Info.CurrentPlayerCount = Info.MaxPlayerCount - Session->NumOpenPublicConnections;
+
+	// Retrieve stored metadata
+	Session->SessionSettings.Get(FName("HostName"), Info.HostName);
+	Session->SessionSettings.Get(FName("LobbyIsPublic"), Info.bIsPublic);
+
+	// Accepted Limitation for now,
+	// Cannot fetch ping in this scope,
+	// TODO: Should cache before joining the session
+	Info.PingInMs = -1;
+
+	return Info;
+}
+
+FLobbyInfo UMultiplayerSessionsSubsystem::ConvertSearchResultToLobbyInfo(
+	const FOnlineSessionSearchResult& SearchResult) const
+{
+	FLobbyInfo LobbyInfo;
+
+	LobbyInfo.LobbyId = SearchResult.GetSessionIdStr();
+	LobbyInfo.MaxPlayerCount = SearchResult.Session.SessionSettings.NumPublicConnections;
+	LobbyInfo.CurrentPlayerCount = LobbyInfo.MaxPlayerCount - SearchResult.Session.NumOpenPublicConnections;
+	LobbyInfo.PingInMs = SearchResult.PingInMs;
+
+	SearchResult.Session.SessionSettings.Get(FName("HostName"), LobbyInfo.HostName);
+	SearchResult.Session.SessionSettings.Get(FName("LobbyIsPublic"), LobbyInfo.bIsPublic);
+
+	return LobbyInfo;
+}
+
+/* LOBBY QUERY METHODS */
+
+bool UMultiplayerSessionsSubsystem::IsInLobby() const
+{
+	if (!SessionInterface.IsValid())
+	{
+		return false;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	return Session != nullptr;
+}
+
+FLobbyInfo UMultiplayerSessionsSubsystem::GetCurrentLobbyInfo() const
+{
+	return CreateLobbyInfoFromSession();
+}
+
+bool UMultiplayerSessionsSubsystem::IsLobbyHost() const
+{
+	if (!SessionInterface.IsValid())
+	{
+		return false;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (!Session || !Session->OwningUserId)
+	{
+		return false;
+	}
+
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (!LocalPlayer)
+	{
+		return false;
+	}
+
+	FUniqueNetIdRepl LocalPlayerNetId = LocalPlayer->GetPreferredUniqueNetId();
+	return LocalPlayerNetId.IsValid() && *LocalPlayerNetId == *Session->OwningUserId;
+}
+
+TArray<FLobbyPlayerInfo> UMultiplayerSessionsSubsystem::GetLobbyPlayers() const
+{
+	TArray<FLobbyPlayerInfo> Players;
+	if (!SessionInterface.IsValid())
+	{
+		return Players;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (!Session)
+	{
+		return Players;
+	}
+
+	IOnlineSubsystem* OnlineSubsystem = Online::GetSubsystem(GetWorld());
+	// Get identity interface for player names
+	IOnlineIdentityPtr IdentityInterface =
+		OnlineSubsystem ? OnlineSubsystem->GetIdentityInterface() : nullptr;
+
+	for (const FUniqueNetIdRef& PlayerId : Session->RegisteredPlayers)
+	{
+		FLobbyPlayerInfo PlayerInfo;
+		PlayerInfo.PlayerId = PlayerId->ToString();
+		PlayerInfo.bIsHost = Session->OwningUserId.IsValid() && *PlayerId == *Session->OwningUserId;
+
+		if (IdentityInterface.IsValid())
+		{
+			PlayerInfo.PlayerName = IdentityInterface->GetPlayerNickname(*PlayerId);
+		}
+
+		if (PlayerInfo.PlayerName.IsEmpty())
+		{
+			PlayerInfo.PlayerName = TEXT("Unknown");
+		}
+
+		Players.Add(PlayerInfo);
+	}
+
+	return Players;
+}
+
+void UMultiplayerSessionsSubsystem::LeaveLobby()
+{
+	if (!IsInLobby())
+	{
+		return;
+	}
+
+	if (IsLobbyHost())
+	{
+		// STEAM: Host leaving destroys
+		// the lobby for everyone
+		DestroySession();
+	}
+	else
+	{
+		// STEAM: Client leaving removes
+		// it from the lobby
+		DestroySession();
+	}
+}
+
 /* SESSION HANDLERS */
 /* Soon to be deprecated */
 
@@ -541,84 +724,4 @@ void UMultiplayerSessionsSubsystem::StartSession()
 	{
 		SessionInterface->ClearOnStartSessionCompleteDelegate_Handle(StartSessionCompleteDelegateHandle);
 	}
-}
-
-/* COMMON UTILITIES */
-
-void UMultiplayerSessionsSubsystem::PrintDebugMessage(const FString& Message, bool isError)
-{
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(
-			-1,
-			15.f,
-			isError ? FColor::Red : FColor::Green,
-			Message
-		);
-	}
-}
-
-/* LOBBY UTILITIES */
-FString UMultiplayerSessionsSubsystem::HashPassword(const FString& Password) const
-{
-	// Simple hash using MD5 - sufficient for lobby passwords
-	return FMD5::HashAnsiString(*Password);
-}
-
-bool UMultiplayerSessionsSubsystem::ValidatePassword(const FString& Password, const FString& StoredHash) const
-{
-	if (StoredHash.IsEmpty())
-	{
-		return true;
-	}
-
-	FString InputHash = HashPassword(Password);
-	return InputHash.Equals(StoredHash);
-}
-
-/* Mappers */
-
-FLobbyInfo UMultiplayerSessionsSubsystem::CreateLobbyInfoFromSession() const
-{
-	FLobbyInfo Info;
-
-	if (!SessionInterface.IsValid())
-	{
-		return Info;
-	}
-
-	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
-	if (!Session)
-	{
-		return Info;
-	}
-
-	Info.LobbyId = Session->GetSessionIdStr();
-	Info.MaxPlayerCount = Session->SessionSettings.NumPublicConnections;
-	Info.CurrentPlayerCount = Info.MaxPlayerCount - Session->NumOpenPublicConnections;
-
-	// Retrieve stored metadata
-	Session->SessionSettings.Get(FName("HostName"), Info.HostName);
-	Session->SessionSettings.Get(FName("LobbyIsPublic"), Info.bIsPublic);
-
-	// Host doesn't have ping to self
-	Info.PingInMs = -1;
-
-	return Info;
-}
-
-FLobbyInfo UMultiplayerSessionsSubsystem::ConvertSearchResultToLobbyInfo(
-	const FOnlineSessionSearchResult& SearchResult) const
-{
-	FLobbyInfo LobbyInfo;
-
-	LobbyInfo.LobbyId = SearchResult.GetSessionIdStr();
-	LobbyInfo.MaxPlayerCount = SearchResult.Session.SessionSettings.NumPublicConnections;
-	LobbyInfo.CurrentPlayerCount = LobbyInfo.MaxPlayerCount - SearchResult.Session.NumOpenPublicConnections;
-	LobbyInfo.PingInMs = SearchResult.PingInMs;
-
-	SearchResult.Session.SessionSettings.Get(FName("HostName"), LobbyInfo.HostName);
-	SearchResult.Session.SessionSettings.Get(FName("LobbyIsPublic"), LobbyInfo.bIsPublic);
-
-	return LobbyInfo;
 }
