@@ -87,6 +87,7 @@ public:
 	// -----------------------
 	void CreateLobby(const FLobbySettings& Settings);
 	void FindLobbies(int32 MaxResult = 100);
+	void JoinLobby(const FLobbyInfo& LobbyInfo, const FString& Password = TEXT(""));
 
 	// CUSTOM DELEGATES
 	// -----------------------
@@ -166,6 +167,7 @@ private:
 	FLobbySettings PendingLobbySettings;
 	bool bIsLobbyOperation{false};
 	bool bIsLobbySearch{false};
+	bool bIsLobbyJoin{false};
 
 	// UTILITY FUNCTIONS
 	void PrintDebugMessage(const FString& Message, bool isError);
@@ -173,6 +175,7 @@ private:
 	// Lobby Utilities
 	// ------------------------
 	FString HashPassword(const FString& Password) const;
+	bool ValidatePassword(const FString& Password, const FString& StoredHash) const;
 	FLobbyInfo CreateLobbyInfoFromSession() const;
 	FLobbyInfo ConvertSearchResultToLobbyInfo(const FOnlineSessionSearchResult& SearchResult) const;
 };

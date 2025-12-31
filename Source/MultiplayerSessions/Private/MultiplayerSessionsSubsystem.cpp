@@ -51,55 +51,8 @@ void UMultiplayerSessionsSubsystem::Initialize(FSubsystemCollectionBase& Collect
 	}
 }
 
-void UMultiplayerSessionsSubsystem::CreateSession(int32 NumPublicConntections, FString MatchType)
-{
-	if (!SessionInterface.IsValid())
-	{
-		return;
-	}
+/* LOBBY HANDLERS */
 
-	auto ExistingSession = SessionInterface->GetNamedSession(NAME_GameSession);
-	if (ExistingSession != nullptr)
-	{
-		bCreateSessionOnDestroy = true;
-		LastNumPublicConnections = NumPublicConntections;
-		LastMatchType = MatchType;
-		DestroySession();
-		return;
-	}
-
-	// Store the delegate in a FDelegateHandle 
-	// so we can later remove it from the delegate list
-	CreateSessionCompleteDelegateHandle = SessionInterface->AddOnCreateSessionCompleteDelegate_Handle(
-		CreateSessionCompleteDelegate);
-
-	// Create Session Settings
-	LastSessionSettings = MakeShareable(new FOnlineSessionSettings());
-	LastSessionSettings->bIsLANMatch = Online::GetSubsystem(GetWorld())->GetSubsystemName() == "NULL";
-	LastSessionSettings->NumPublicConnections = NumPublicConntections;
-	LastSessionSettings->bAllowJoinInProgress = true;
-	LastSessionSettings->bAllowJoinViaPresence = true;
-	LastSessionSettings->bShouldAdvertise = true;
-	LastSessionSettings->bUsesPresence = true;
-	LastSessionSettings->bUseLobbiesIfAvailable = true;
-	LastSessionSettings->Set(FName("MatchType"), MatchType, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
-	LastSessionSettings->BuildUniqueId = 1;
-
-	// Create Session
-	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
-	bool isCreateSessionSuccessful = SessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(),
-	                                                                 NAME_GameSession,
-	                                                                 *LastSessionSettings);
-
-	// If Create Session is not successful
-	// Remove Create Session Delegate from the delegate list
-	if (!isCreateSessionSuccessful)
-	{
-		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
-	}
-}
-
-// Extending functionality to lobbies, creation of lobbies implemented.
 void UMultiplayerSessionsSubsystem::CreateLobby(const FLobbySettings& LobbySettings)
 {
 	if (!SessionInterface.IsValid())
@@ -207,6 +160,295 @@ void UMultiplayerSessionsSubsystem::FindLobbies(int32 MaxResult)
 	}
 }
 
+void UMultiplayerSessionsSubsystem::JoinLobby(const FLobbyInfo& LobbyInfo, const FString& Password)
+{
+	if (!SessionInterface.IsValid())
+	{
+		MultiplayerOnLobbyJoinComplete.Broadcast(ELobbyJoinResult::UnknownError);
+		return;
+	}
+
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (!LocalPlayer)
+	{
+		MultiplayerOnLobbyJoinComplete.Broadcast(ELobbyJoinResult::UnknownError);
+		return;
+	}
+
+	if (!LastSessionSearch.IsValid() || LastSessionSearch->SearchResults.Num() == 0)
+	{
+		MultiplayerOnLobbyJoinComplete.Broadcast(ELobbyJoinResult::LobbyNotFound);
+		return;
+	}
+
+	const FOnlineSessionSearchResult* FoundResult = nullptr;
+	for (const FOnlineSessionSearchResult& Result : LastSessionSearch->SearchResults)
+	{
+		if (Result.GetSessionIdStr() == LobbyInfo.LobbyId)
+		{
+			FoundResult = &Result;
+			break;
+		}
+	}
+
+	if (!FoundResult)
+	{
+		MultiplayerOnLobbyJoinComplete.Broadcast(ELobbyJoinResult::LobbyNotFound);
+		return;
+	}
+
+	if (FoundResult->Session.NumOpenPublicConnections <= 0)
+	{
+		MultiplayerOnLobbyJoinComplete.Broadcast(ELobbyJoinResult::LobbyFull);
+		return;
+	}
+
+	bool bIsPublic = true;
+	FoundResult->Session.SessionSettings.Get(FName("LobbyIsPublic"), bIsPublic);
+
+	// Password Validation
+	if (!bIsPublic)
+	{
+		FString StoredHash;
+		FoundResult->Session.SessionSettings.Get(FName("PasswordHash"), StoredHash);
+
+		if (!ValidatePassword(Password, StoredHash))
+		{
+			MultiplayerOnLobbyJoinComplete.Broadcast(ELobbyJoinResult::WrongPassword);
+			return;
+		}
+	}
+
+	bIsLobbyJoin = true;
+
+	JoinSessionCompleteDelegateHandle = SessionInterface->AddOnJoinSessionCompleteDelegate_Handle(
+		JoinSessionCompleteDelegate);
+
+	bool bSuccess = SessionInterface->JoinSession(*LocalPlayer->GetPreferredUniqueNetId(),
+	                                              NAME_GameSession,
+	                                              *FoundResult);
+
+	if (!bSuccess)
+	{
+		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
+		bIsLobbyJoin = false;
+		MultiplayerOnLobbyJoinComplete.Broadcast(ELobbyJoinResult::ConnectionFailed);
+	}
+}
+
+void UMultiplayerSessionsSubsystem::Deinitialize()
+{
+	Super::Deinitialize();
+}
+
+/* COMMON CALLBACKS */
+/* Callbacks called by the registered delegates of Session Interface */
+
+void UMultiplayerSessionsSubsystem::OnCreateSessionComplete(FName SessionName, bool bWasSuccessful)
+{
+	if (SessionInterface)
+	{
+		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
+	}
+
+	// Handle lobby creation vs session creation
+	if (bIsLobbyOperation)
+	{
+		bIsLobbyOperation = false;
+		if (bWasSuccessful)
+		{
+			FLobbyInfo LobbyInfo = CreateLobbyInfoFromSession();
+			MultiplayerOnLobbyCreated.Broadcast(true, LobbyInfo);
+		}
+		else
+		{
+			MultiplayerOnLobbyCreated.Broadcast(false, FLobbyInfo());
+		}
+	}
+	else
+	{
+		// Original behavior for CreateSession
+		MultiplayerOnCreateSessionComplete.Broadcast(bWasSuccessful);
+	}
+}
+
+void UMultiplayerSessionsSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
+{
+	if (SessionInterface)
+	{
+		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
+	}
+
+	if (bIsLobbySearch)
+	{
+		bIsLobbySearch = false;
+		if (!bWasSuccessful || !LastSessionSearch.IsValid() || LastSessionSearch->SearchResults.Num() <= 0)
+		{
+			MultiplayerOnLobbyListUpdated.Broadcast(TArray<FLobbyInfo>(), false);
+			return;
+		}
+
+		// Convert to FLobbyInfo array
+		TArray<FLobbyInfo> Lobbies;
+
+		for (const FOnlineSessionSearchResult& Result : LastSessionSearch->SearchResults)
+		{
+			Lobbies.Add(ConvertSearchResultToLobbyInfo(Result));
+		}
+		MultiplayerOnLobbyListUpdated.Broadcast(Lobbies, true);
+	}
+	else
+	{
+		if (LastSessionSearch->SearchResults.Num() <= 0)
+		{
+			MultiplayerOnFindSessionsComplete.Broadcast(TArray<FOnlineSessionSearchResult>(), false);
+			return;
+		}
+
+		MultiplayerOnFindSessionsComplete.Broadcast(LastSessionSearch->SearchResults, true);
+	}
+}
+
+void UMultiplayerSessionsSubsystem::OnJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result)
+{
+	if (SessionInterface)
+	{
+		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
+	}
+
+	if (bIsLobbyJoin)
+	{
+		bIsLobbyJoin = false;
+
+		ELobbyJoinResult LobbyJoinResult;
+		switch (Result)
+		{
+		case EOnJoinSessionCompleteResult::Success:
+			LobbyJoinResult = ELobbyJoinResult::Success;
+			break;
+		case EOnJoinSessionCompleteResult::SessionIsFull:
+			LobbyJoinResult = ELobbyJoinResult::LobbyFull;
+			break;
+		case EOnJoinSessionCompleteResult::SessionDoesNotExist:
+			LobbyJoinResult = ELobbyJoinResult::LobbyNotFound;
+			break;
+		case EOnJoinSessionCompleteResult::CouldNotRetrieveAddress:
+		case EOnJoinSessionCompleteResult::AlreadyInSession:
+		default:
+			LobbyJoinResult = ELobbyJoinResult::ConnectionFailed;
+			break;
+		}
+
+		// Cache connect address on success
+		if (Result == EOnJoinSessionCompleteResult::Success && SessionInterface)
+		{
+			FString Address;
+			SessionInterface->GetResolvedConnectString(NAME_GameSession, Address);
+			CachedConnectAddress = Address;
+		}
+
+		MultiplayerOnLobbyJoinComplete.Broadcast(LobbyJoinResult);
+	}
+	else
+	{
+		if (Result == EOnJoinSessionCompleteResult::Success && SessionInterface)
+		{
+			FString Address;
+			SessionInterface->GetResolvedConnectString(NAME_GameSession, Address);
+			CachedConnectAddress = Address;
+		}
+		MultiplayerOnJoinSessionComplete.Broadcast(Result);
+	}
+}
+
+void UMultiplayerSessionsSubsystem::OnDestroySessionComplete(FName SessionName, bool bWasSuccessful)
+{
+	if (SessionInterface)
+	{
+		SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteDelegateHandle);
+	}
+
+	if (bWasSuccessful)
+	{
+		if (bCreateSessionOnDestroy)
+		{
+			bCreateSessionOnDestroy = false;
+			CreateSession(LastNumPublicConnections, LastMatchType);
+			return;
+		}
+
+		if (bCreateLobbyOnDestroy)
+		{
+			bCreateLobbyOnDestroy = false;
+			CreateLobby(PendingLobbySettings);
+			return;
+		}
+	}
+
+	MultiplayerOnDestroySessionComplete.Broadcast(bWasSuccessful);
+}
+
+void UMultiplayerSessionsSubsystem::OnStartSessionComplete(FName SessionName, bool bWasSuccessful)
+{
+	if (SessionInterface)
+	{
+		SessionInterface->ClearOnStartSessionCompleteDelegate_Handle(StartSessionCompleteDelegateHandle);
+	}
+
+	MultiplayerOnStartSessionComplete.Broadcast(bWasSuccessful);
+}
+
+/* SESSION HANDLERS */
+/* Soon to be deprecated */
+
+void UMultiplayerSessionsSubsystem::CreateSession(int32 NumPublicConntections, FString MatchType)
+{
+	if (!SessionInterface.IsValid())
+	{
+		return;
+	}
+
+	auto ExistingSession = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (ExistingSession != nullptr)
+	{
+		bCreateSessionOnDestroy = true;
+		LastNumPublicConnections = NumPublicConntections;
+		LastMatchType = MatchType;
+		DestroySession();
+		return;
+	}
+
+	// Store the delegate in a FDelegateHandle 
+	// so we can later remove it from the delegate list
+	CreateSessionCompleteDelegateHandle = SessionInterface->AddOnCreateSessionCompleteDelegate_Handle(
+		CreateSessionCompleteDelegate);
+
+	// Create Session Settings
+	LastSessionSettings = MakeShareable(new FOnlineSessionSettings());
+	LastSessionSettings->bIsLANMatch = Online::GetSubsystem(GetWorld())->GetSubsystemName() == "NULL";
+	LastSessionSettings->NumPublicConnections = NumPublicConntections;
+	LastSessionSettings->bAllowJoinInProgress = true;
+	LastSessionSettings->bAllowJoinViaPresence = true;
+	LastSessionSettings->bShouldAdvertise = true;
+	LastSessionSettings->bUsesPresence = true;
+	LastSessionSettings->bUseLobbiesIfAvailable = true;
+	LastSessionSettings->Set(FName("MatchType"), MatchType, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+	LastSessionSettings->BuildUniqueId = 1;
+
+	// Create Session
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	bool isCreateSessionSuccessful = SessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(),
+	                                                                 NAME_GameSession,
+	                                                                 *LastSessionSettings);
+
+	// If Create Session is not successful
+	// Remove Create Session Delegate from the delegate list
+	if (!isCreateSessionSuccessful)
+	{
+		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
+	}
+}
+
 void UMultiplayerSessionsSubsystem::FindSessions(int32 MaxSearchResults)
 {
 	// Check if the Session Interface is valid
@@ -301,131 +543,7 @@ void UMultiplayerSessionsSubsystem::StartSession()
 	}
 }
 
-void UMultiplayerSessionsSubsystem::Deinitialize()
-{
-	Super::Deinitialize();
-}
-
-void UMultiplayerSessionsSubsystem::OnCreateSessionComplete(FName SessionName, bool bWasSuccessful)
-{
-	if (SessionInterface)
-	{
-		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
-	}
-
-	// Handle lobby creation vs session creation
-	if (bIsLobbyOperation)
-	{
-		bIsLobbyOperation = false;
-		if (bWasSuccessful)
-		{
-			FLobbyInfo LobbyInfo = CreateLobbyInfoFromSession();
-			MultiplayerOnLobbyCreated.Broadcast(true, LobbyInfo);
-		}
-		else
-		{
-			MultiplayerOnLobbyCreated.Broadcast(false, FLobbyInfo());
-		}
-	}
-	else
-	{
-		// Original behavior for CreateSession
-		MultiplayerOnCreateSessionComplete.Broadcast(bWasSuccessful);
-	}
-}
-
-void UMultiplayerSessionsSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
-{
-	if (SessionInterface)
-	{
-		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
-	}
-
-	if (bIsLobbySearch)
-	{
-		bIsLobbySearch = false;
-		if (!bWasSuccessful || !LastSessionSearch.IsValid() || LastSessionSearch->SearchResults.Num() <= 0)
-		{
-			MultiplayerOnLobbyListUpdated.Broadcast(TArray<FLobbyInfo>(), false);
-			return;
-		}
-
-		// Convert to FLobbyInfo array
-		TArray<FLobbyInfo> Lobbies;
-
-		for (const FOnlineSessionSearchResult& Result : LastSessionSearch->SearchResults)
-		{
-			Lobbies.Add(ConvertSearchResultToLobbyInfo(Result));
-		}
-		MultiplayerOnLobbyListUpdated.Broadcast(Lobbies, true);
-	}
-	else
-	{
-		if (LastSessionSearch->SearchResults.Num() <= 0)
-		{
-			MultiplayerOnFindSessionsComplete.Broadcast(TArray<FOnlineSessionSearchResult>(), false);
-			return;
-		}
-
-		MultiplayerOnFindSessionsComplete.Broadcast(LastSessionSearch->SearchResults, true);
-	}
-}
-
-void UMultiplayerSessionsSubsystem::OnJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result)
-{
-	if (Result == EOnJoinSessionCompleteResult::Success)
-	{
-		if (SessionInterface)
-		{
-			SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
-
-			FString Address;
-			SessionInterface->GetResolvedConnectString(NAME_GameSession, Address);
-			CachedConnectAddress = Address;
-		}
-
-		MultiplayerOnJoinSessionComplete.Broadcast(Result);
-	}
-}
-
-void UMultiplayerSessionsSubsystem::OnDestroySessionComplete(FName SessionName, bool bWasSuccessful)
-{
-	if (SessionInterface)
-	{
-		SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteDelegateHandle);
-	}
-
-	if (bWasSuccessful)
-	{
-		if (bCreateSessionOnDestroy)
-		{
-			bCreateSessionOnDestroy = false;
-			CreateSession(LastNumPublicConnections, LastMatchType);
-			return;
-		}
-
-		if (bCreateLobbyOnDestroy)
-		{
-			bCreateLobbyOnDestroy = false;
-			CreateLobby(PendingLobbySettings);
-			return;
-		}
-	}
-
-	MultiplayerOnDestroySessionComplete.Broadcast(bWasSuccessful);
-}
-
-void UMultiplayerSessionsSubsystem::OnStartSessionComplete(FName SessionName, bool bWasSuccessful)
-{
-	if (SessionInterface)
-	{
-		SessionInterface->ClearOnStartSessionCompleteDelegate_Handle(StartSessionCompleteDelegateHandle);
-	}
-
-	MultiplayerOnStartSessionComplete.Broadcast(bWasSuccessful);
-}
-
-/* UTILITIES */
+/* COMMON UTILITIES */
 
 void UMultiplayerSessionsSubsystem::PrintDebugMessage(const FString& Message, bool isError)
 {
@@ -446,6 +564,19 @@ FString UMultiplayerSessionsSubsystem::HashPassword(const FString& Password) con
 	// Simple hash using MD5 - sufficient for lobby passwords
 	return FMD5::HashAnsiString(*Password);
 }
+
+bool UMultiplayerSessionsSubsystem::ValidatePassword(const FString& Password, const FString& StoredHash) const
+{
+	if (StoredHash.IsEmpty())
+	{
+		return true;
+	}
+
+	FString InputHash = HashPassword(Password);
+	return InputHash.Equals(StoredHash);
+}
+
+/* Mappers */
 
 FLobbyInfo UMultiplayerSessionsSubsystem::CreateLobbyInfoFromSession() const
 {
