@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Interfaces/OnlineSessionInterface.h"
+#include "MultiplayerSessionsTypes.h"
 #include "MultiplayerSessionsSubsystem.generated.h"
 
 // Declaring our own custom delegates for the Menu class to bind callbacks to
@@ -17,9 +18,50 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnFindSessionsComplete,
 DECLARE_MULTICAST_DELEGATE_OneParam(FMultiplayerOnJoinSessionComplete,
                                     EOnJoinSessionCompleteResult::Type);
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnDestroySessionComplete, bool, bWasSuccessful);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnDestroySessionComplete,
+                                            bool, bWasSuccessful);
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnStartSessionComplete, bool, bWasSuccessful);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnStartSessionComplete,
+                                            bool, bWasSuccessful);
+
+// LOBBY SYSTEM DELEGATES
+// ----------------------
+
+// Lobby creation result
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnLobbyCreated,
+                                             bool, bWasSuccessful,
+                                             const FLobbyInfo&, LobbyInfo);
+
+// Lobby search result
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnLobbyListUpdated,
+                                             const TArray<FLobbyInfo>&, Lobbies,
+                                             bool, bWasSuccessful);
+
+// Lobby join attempt result
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnLobbyJoinComplete,
+                                            ELobbyJoinResult, Result);
+
+// Lobby player joined event
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnPlayerJoinedLobby,
+                                            const FLobbyPlayerInfo&, PlayerInfo);
+
+// Lobby player left event
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnPlayerLeftLobby,
+                                             const FLobbyPlayerInfo&, PlayerInfo,
+                                             ELobbyLeaveReason, Reason);
+
+// Lobby local player kicked event
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnKickedFromLobby,
+                                            FString, Reason);
+
+// Lobby host changed event
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnHostMigration,
+                                             const FLobbyPlayerInfo&, OldHost,
+                                             const FLobbyPlayerInfo&, NewHost);
+
+// Lobby settings modified event
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnLobbySettingsUpdated,
+                                            const FLobbyInfo&, UpdatedLobbyInfo);
 
 /**
  * 
@@ -32,14 +74,11 @@ class MULTIPLAYERSESSIONS_API UMultiplayerSessionsSubsystem : public UGameInstan
 public:
 	UMultiplayerSessionsSubsystem();
 
-	// SESSION HANDLERS
-	// ------------------------
-	// These will be called outside the Multiplayer Sessions Subsystem
-	void CreateSession(int32 NumPublicConntections, FString MatchType);
-	void FindSessions(int32 MaxSearchResults);
-	void JoinSession(const FOnlineSessionSearchResult& SessionResult);
-	void DestroySession();
-	void StartSession();
+	// LOBBY HANDLERS
+	// -----------------------
+	void CreateLobby(const FLobbySettings& Settings);
+	void FindLobbies(int32 MaxResult = 100);
+	void JoinLobby(const FLobbyInfo& LobbyInfo, const FString& Password = TEXT(""));
 
 	// CUSTOM DELEGATES
 	// -----------------------
@@ -50,10 +89,39 @@ public:
 	FMultiplayerOnDestroySessionComplete MultiplayerOnDestroySessionComplete;
 	FMultiplayerOnStartSessionComplete MultiplayerOnStartSessionComplete;
 
+	// LOBBY DELEGATES
+	// ----------------------
+	FMultiplayerOnLobbyCreated MultiplayerOnLobbyCreated;
+	FMultiplayerOnLobbyListUpdated MultiplayerOnLobbyListUpdated;
+	FMultiplayerOnLobbyJoinComplete MultiplayerOnLobbyJoinComplete;
+	FMultiplayerOnPlayerJoinedLobby MultiplayerOnPlayerJoinedLobby;
+	FMultiplayerOnPlayerLeftLobby MultiplayerOnPlayerLeftLobby;
+	FMultiplayerOnKickedFromLobby MultiplayerOnKickedFromLobby;
+	FMultiplayerOnHostMigration MultiplayerOnHostMigration;
+	FMultiplayerOnLobbySettingsUpdated MultiplayerOnLobbySettingsUpdated;
+
+	// LOBBY QUERY METHODS
+	// ------------------------
+	FLobbyInfo GetCurrentLobbyInfo() const;
+	TArray<FLobbyPlayerInfo> GetLobbyPlayers() const;
+	bool IsLobbyHost() const;
+	bool IsInLobby() const;
+	void LeaveLobby();
+
 	// GETTER FUNCTIONS
 	// -----------------------
 	// Getter functions for the Menu Class
 	const FString& GetCachedConnectAddress() const { return CachedConnectAddress; }
+
+	/* DEPRECATED */
+	// SESSION HANDLERS
+	// ------------------------
+	// These will be called outside the Multiplayer Sessions Subsystem
+	void CreateSession(int32 NumPublicConntections, FString MatchType);
+	void FindSessions(int32 MaxSearchResults);
+	void JoinSession(const FOnlineSessionSearchResult& SessionResult);
+	void DestroySession();
+	void StartSession();
 
 protected:
 	// LIFETIME OVERRIDES
@@ -95,10 +163,28 @@ private:
 	FOnStartSessionCompleteDelegate StartSessionCompleteDelegate;
 	FDelegateHandle StartSessionCompleteDelegateHandle;
 
+	// SESSION STATE
+	// Soon will be deprecated
+	// ------------------------
 	bool bCreateSessionOnDestroy{false};
 	int32 LastNumPublicConnections;
 	FString LastMatchType;
 
+	// LOBBY STATE
+	// ------------------------
+	bool bCreateLobbyOnDestroy{false};
+	FLobbySettings PendingLobbySettings;
+	bool bIsLobbyOperation{false};
+	bool bIsLobbySearch{false};
+	bool bIsLobbyJoin{false};
+
 	// UTILITY FUNCTIONS
 	void PrintDebugMessage(const FString& Message, bool isError);
+
+	// Lobby Utilities
+	// ------------------------
+	FString HashPassword(const FString& Password) const;
+	bool ValidatePassword(const FString& Password, const FString& StoredHash) const;
+	FLobbyInfo CreateLobbyInfoFromSession() const;
+	FLobbyInfo ConvertSearchResultToLobbyInfo(const FOnlineSessionSearchResult& SearchResult) const;
 };
