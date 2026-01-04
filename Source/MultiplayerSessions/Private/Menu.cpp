@@ -46,11 +46,23 @@ void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FStr
 		MultiplayerSessionsSubsystem->MultiplayerOnDestroySessionComplete.
 		                              AddDynamic(this, &ThisClass::OnDestroySession);
 		MultiplayerSessionsSubsystem->MultiplayerOnStartSessionComplete.AddDynamic(this, &ThisClass::OnStartSession);
+		MultiplayerSessionsSubsystem->MultiplayerOnPlayerLeftLobby.AddDynamic(this, &ThisClass::OnPlayerLeft);
 	}
 }
 
 void UMenu::NativeDestruct()
 {
+	if (MultiplayerSessionsSubsystem)
+	{
+		MultiplayerSessionsSubsystem->MultiplayerOnCreateSessionComplete.RemoveDynamic(
+			this, &ThisClass::OnCreateSession);
+		MultiplayerSessionsSubsystem->MultiplayerOnFindSessionsComplete.RemoveAll(this);
+		MultiplayerSessionsSubsystem->MultiplayerOnJoinSessionComplete.RemoveAll(this);
+		MultiplayerSessionsSubsystem->MultiplayerOnDestroySessionComplete.RemoveDynamic(
+			this, &ThisClass::OnDestroySession);
+		MultiplayerSessionsSubsystem->MultiplayerOnStartSessionComplete.RemoveDynamic(this, &ThisClass::OnStartSession);
+		MultiplayerSessionsSubsystem->MultiplayerOnPlayerLeftLobby.RemoveDynamic(this, &ThisClass::OnPlayerLeft);
+	}
 	MenuTearDown();
 	Super::NativeDestruct();
 }
@@ -154,10 +166,14 @@ void UMenu::OnJoinSession(EOnJoinSessionCompleteResult::Type Result)
 			FString::Printf(TEXT("Found Session's Conntect String: %s"), *Address),
 			false);
 
-		APlayerController* FirstLocalPlayerController = GetGameInstance()->GetFirstLocalPlayerController();
-		if (FirstLocalPlayerController)
+		UGameInstance* GameInstance = GetGameInstance();
+		if (GameInstance)
 		{
-			FirstLocalPlayerController->ClientTravel(Address, TRAVEL_Absolute);
+			APlayerController* FirstLocalPlayerController = GameInstance->GetFirstLocalPlayerController();
+			if (FirstLocalPlayerController)
+			{
+				FirstLocalPlayerController->ClientTravel(Address, TRAVEL_Absolute);
+			}
 		}
 	}
 }
@@ -177,6 +193,29 @@ void UMenu::OnStartSession(bool bWasSuccessful)
 	else
 	{
 		PrintDebugMessage(FString(TEXT("Game couldn't start.")), true);
+	}
+}
+
+void UMenu::OnPlayerLeft(const FLobbyPlayerInfo& PlayerInfo, ELobbyLeaveReason LeaveReason)
+{
+	switch (LeaveReason)
+	{
+	case ELobbyLeaveReason::Kicked:
+		{
+			PrintDebugMessage(
+				FString::Printf(
+					TEXT("%s is kicked!"), *PlayerInfo.PlayerName),
+				false);
+			break;
+		}
+	case ELobbyLeaveReason::Left:
+		{
+			PrintDebugMessage(
+				FString::Printf(
+					TEXT("%s has left the game!"), *PlayerInfo.PlayerName),
+				false);
+			break;
+		}
 	}
 }
 

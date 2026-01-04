@@ -13,6 +13,8 @@ UMultiplayerSessionsSubsystem::UMultiplayerSessionsSubsystem()
 {
 }
 
+/* MULTIPLAYER SESSIONS SUBSYSTEM LIFECYCLE */
+
 void UMultiplayerSessionsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -48,7 +50,33 @@ void UMultiplayerSessionsSubsystem::Initialize(FSubsystemCollectionBase& Collect
 			FOnStartSessionCompleteDelegate::CreateUObject(
 				this, &ThisClass::OnStartSessionComplete
 			);
+
+		UpdateSessionCompleteDelegate =
+			FOnUpdateSessionCompleteDelegate::CreateUObject(
+				this, &ThisClass::OnUpdateSessionComplete
+			);
+
+		SessionParticipantLeftDelegate =
+			FOnSessionParticipantLeftDelegate::CreateUObject(
+				this, &ThisClass::OnUnregisterPlayerComplete
+			);
+
+		// Persistent delegate for player leave events
+		SessionParticipantLeftDelegateHandle =
+			SessionInterface->AddOnSessionParticipantLeftDelegate_Handle(
+				SessionParticipantLeftDelegate
+			);
 	}
+}
+
+void UMultiplayerSessionsSubsystem::Deinitialize()
+{
+	// Removal of persistent delegates
+	if (SessionInterface.IsValid())
+	{
+		SessionInterface->ClearOnSessionParticipantLeftDelegate_Handle(SessionParticipantLeftDelegateHandle);
+	}
+	Super::Deinitialize();
 }
 
 /* LOBBY HANDLERS */
@@ -236,12 +264,161 @@ void UMultiplayerSessionsSubsystem::JoinLobby(const FLobbyInfo& LobbyInfo, const
 	}
 }
 
-void UMultiplayerSessionsSubsystem::Deinitialize()
+void UMultiplayerSessionsSubsystem::UpdateLobbySettings(const FLobbySettings& NewSettings)
 {
-	Super::Deinitialize();
+	if (!SessionInterface.IsValid())
+	{
+		MultiplayerOnLobbySettingsUpdated.Broadcast(FLobbyInfo());
+		return;
+	}
+
+	if (!IsLobbyHost())
+	{
+		MultiplayerOnLobbySettingsUpdated.Broadcast(FLobbyInfo());
+		return;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (!Session)
+	{
+		MultiplayerOnLobbySettingsUpdated.Broadcast(FLobbyInfo());
+		return;
+	}
+
+	FOnlineSessionSettings UpdatedSessionSettings = Session->SessionSettings;
+	UpdatedSessionSettings.NumPublicConnections = NewSettings.MaxPlayers;
+	UpdatedSessionSettings.Set(FName("LobbyIsPublic"), NewSettings.bIsPublic,
+	                           EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+
+	// Update password hash
+	if (!NewSettings.bIsPublic && !NewSettings.Password.IsEmpty())
+	{
+		FString PasswordHash = HashPassword(NewSettings.Password);
+		UpdatedSessionSettings.Set(FName("PasswordHash"), PasswordHash,
+		                           EOnlineDataAdvertisementType::ViaOnlineService);
+	}
+	else
+	{
+		// Switching to public lobby or empty password
+		UpdatedSessionSettings.Remove(FName("PasswordHash"));
+	}
+
+	UpdateSessionCompleteDelegateHandle = SessionInterface->AddOnUpdateSessionCompleteDelegate_Handle(
+		UpdateSessionCompleteDelegate);
+
+	bool bSuccess = SessionInterface->UpdateSession(NAME_GameSession, UpdatedSessionSettings);
+
+	if (!bSuccess)
+	{
+		SessionInterface->ClearOnUpdateSessionCompleteDelegate_Handle(UpdateSessionCompleteDelegateHandle);
+		MultiplayerOnLobbySettingsUpdated.Broadcast(FLobbyInfo());
+	}
 }
 
-/* COMMON CALLBACKS */
+void UMultiplayerSessionsSubsystem::SetLobbyVisibility(bool bIsPublic, const FString& Password)
+{
+	if (!IsLobbyHost())
+	{
+		MultiplayerOnLobbySettingsUpdated.Broadcast(FLobbyInfo());
+		return;
+	}
+
+	FLobbyInfo CurrentInfo = GetCurrentLobbyInfo();
+
+	FLobbySettings NewSettings;
+	NewSettings.MaxPlayers = CurrentInfo.MaxPlayerCount;
+	NewSettings.bIsPublic = bIsPublic;
+	NewSettings.Password = Password;
+
+	UpdateLobbySettings(NewSettings);
+}
+
+void UMultiplayerSessionsSubsystem::KickPlayer(const FString& PlayerId, const FString& Reason)
+{
+	if (!SessionInterface.IsValid())
+	{
+		return;
+	}
+
+	if (!IsLobbyHost())
+	{
+		return;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (!Session)
+	{
+		return;
+	}
+
+	// Find the player in registered players
+	FUniqueNetIdPtr FoundPlayerId = nullptr;
+	for (const FUniqueNetIdRef& RegisteredId : Session->RegisteredPlayers)
+	{
+		if (RegisteredId->ToString() == PlayerId)
+		{
+			FoundPlayerId = RegisteredId;
+			break;
+		}
+	}
+
+	// Player not found in session
+	if (!FoundPlayerId.IsValid())
+	{
+		return;
+	}
+
+	// Don't allow kicking yourself
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (LocalPlayer)
+	{
+		FUniqueNetIdRepl LocalId = LocalPlayer->GetPreferredUniqueNetId();
+		if (LocalId.IsValid() && *LocalId == *FoundPlayerId)
+		{
+			return;
+		}
+	}
+
+	// Cache player info BEFORE they are removed from RegisteredPlayers
+	FLobbyPlayerInfo KickedPlayerInfo;
+	KickedPlayerInfo.PlayerId = PlayerId;
+	KickedPlayerInfo.bIsHost = false;
+
+	IOnlineSubsystem* OnlineSubsystem = Online::GetSubsystem(GetWorld());
+	IOnlineIdentityPtr IdentityInterface =
+		OnlineSubsystem ? OnlineSubsystem->GetIdentityInterface() : nullptr;
+
+	if (IdentityInterface.IsValid())
+	{
+		KickedPlayerInfo.PlayerName = IdentityInterface->GetPlayerNickname(*FoundPlayerId);
+	}
+	if (KickedPlayerInfo.PlayerName.IsEmpty())
+	{
+		KickedPlayerInfo.PlayerName = TEXT("Unknown");
+	}
+
+	// Store pending kick data
+	PendingKicks.Add(PlayerId, Reason);
+	PendingKickInfo.Add(PlayerId, KickedPlayerInfo);
+
+	// Unregister the player from the session
+	// This will trigger ONSessionParticipantRemoved on Steam
+	bool bSuccess = SessionInterface->UnregisterPlayer(NAME_GameSession, *FoundPlayerId);
+	if (!bSuccess)
+	{
+		PendingKicks.Remove(PlayerId);
+		PendingKickInfo.Remove(PlayerId);
+	}
+}
+
+void UMultiplayerSessionsSubsystem::TransferHost(const FString& NewHostPlayerId)
+{
+	// TODO: Requires direct Steam API access
+	// Steam's SetLobbyOwner() not exposed through Unreal OSS
+	MultiplayerOnHostMigration.Broadcast(FLobbyPlayerInfo(), FLobbyPlayerInfo());
+}
+
+/* LOBBY CALLBACKS */
 /* Callbacks called by the registered delegates of Session Interface */
 
 void UMultiplayerSessionsSubsystem::OnCreateSessionComplete(FName SessionName, bool bWasSuccessful)
@@ -398,6 +575,311 @@ void UMultiplayerSessionsSubsystem::OnStartSessionComplete(FName SessionName, bo
 	MultiplayerOnStartSessionComplete.Broadcast(bWasSuccessful);
 }
 
+void UMultiplayerSessionsSubsystem::OnUpdateSessionComplete(FName SessionName, bool bWasSuccessful)
+{
+	if (SessionInterface)
+	{
+		SessionInterface->ClearOnUpdateSessionCompleteDelegate_Handle(UpdateSessionCompleteDelegateHandle);
+	}
+
+	if (bWasSuccessful)
+	{
+		FLobbyInfo UpdatedInfo = CreateLobbyInfoFromSession();
+		MultiplayerOnLobbySettingsUpdated.Broadcast(UpdatedInfo);
+	}
+	else
+	{
+		MultiplayerOnLobbySettingsUpdated.Broadcast(FLobbyInfo());
+	}
+}
+
+void UMultiplayerSessionsSubsystem::OnUnregisterPlayerComplete(FName SessionName,
+                                                               const FUniqueNetId& PlayerId,
+                                                               EOnSessionParticipantLeftReason Reason)
+{
+	FString PlayerIdStr = PlayerId.ToString();
+
+	if (PendingKicks.Contains(PlayerIdStr))
+	{
+		// Leaving is initiated by host, player is kicked
+		FString KickReason = PendingKicks[PlayerIdStr];
+		FLobbyPlayerInfo KickedPlayerInfo = PendingKickInfo[PlayerIdStr];
+
+		PendingKicks.Remove(PlayerIdStr);
+		PendingKickInfo.Remove(PlayerIdStr);
+
+		MultiplayerOnPlayerLeftLobby.Broadcast(KickedPlayerInfo, ELobbyLeaveReason::Kicked);
+	}
+	else
+	{
+		// Voluntary leave or disconnect
+		FLobbyPlayerInfo LeftPlayerInfo;
+		LeftPlayerInfo.PlayerId = PlayerIdStr;
+		LeftPlayerInfo.bIsHost = false;
+
+		// Try to get player name, may fail if already removed
+		IOnlineSubsystem* OnlineSubsystem = Online::GetSubsystem(GetWorld());
+		IOnlineIdentityPtr IdentityInterface =
+			OnlineSubsystem ? OnlineSubsystem->GetIdentityInterface() : nullptr;
+
+		if (IdentityInterface.IsValid())
+		{
+			LeftPlayerInfo.PlayerName = IdentityInterface->GetPlayerNickname(PlayerId);
+		}
+
+		if (LeftPlayerInfo.PlayerName.IsEmpty())
+		{
+			LeftPlayerInfo.PlayerName = TEXT("Unknown");
+		}
+
+		// Determine leave reason
+		ELobbyLeaveReason LeaveReason;
+		switch (Reason)
+		{
+		case EOnSessionParticipantLeftReason::Kicked:
+			LeaveReason = ELobbyLeaveReason::Kicked;
+			break;
+		case EOnSessionParticipantLeftReason::Left:
+			LeaveReason = ELobbyLeaveReason::Left;
+			break;
+		case EOnSessionParticipantLeftReason::Disconnected:
+			LeaveReason = ELobbyLeaveReason::Disconnected;
+			break;
+		default:
+			LeaveReason = ELobbyLeaveReason::Unknown;
+			break;
+		}
+
+		MultiplayerOnPlayerLeftLobby.Broadcast(LeftPlayerInfo, LeaveReason);
+	}
+}
+
+/* LOBBY UTILITIES */
+FString UMultiplayerSessionsSubsystem::HashPassword(const FString& Password) const
+{
+	// Simple hash using MD5 - sufficient for lobby passwords
+	return FMD5::HashAnsiString(*Password);
+}
+
+bool UMultiplayerSessionsSubsystem::ValidatePassword(const FString& Password, const FString& StoredHash) const
+{
+	if (StoredHash.IsEmpty())
+	{
+		return true;
+	}
+
+	FString InputHash = HashPassword(Password);
+	return InputHash.Equals(StoredHash);
+}
+
+void UMultiplayerSessionsSubsystem::PrintDebugMessage(const FString& Message, bool isError)
+{
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			-1,
+			15.f,
+			isError ? FColor::Red : FColor::Green,
+			Message
+		);
+	}
+}
+
+/* LOBBY MAPPERS */
+
+FLobbyInfo UMultiplayerSessionsSubsystem::CreateLobbyInfoFromSession() const
+{
+	FLobbyInfo Info;
+
+	if (!SessionInterface.IsValid())
+	{
+		return Info;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (!Session)
+	{
+		return Info;
+	}
+
+	Info.LobbyId = Session->GetSessionIdStr();
+	Info.MaxPlayerCount = Session->SessionSettings.NumPublicConnections;
+	Info.CurrentPlayerCount = Info.MaxPlayerCount - Session->NumOpenPublicConnections;
+
+	// Retrieve stored metadata
+	Session->SessionSettings.Get(FName("HostName"), Info.HostName);
+	Session->SessionSettings.Get(FName("LobbyIsPublic"), Info.bIsPublic);
+
+	// Accepted Limitation for now,
+	// Cannot fetch ping in this scope,
+	// TODO: Should cache before joining the session
+	Info.PingInMs = -1;
+
+	return Info;
+}
+
+FLobbyInfo UMultiplayerSessionsSubsystem::ConvertSearchResultToLobbyInfo(
+	const FOnlineSessionSearchResult& SearchResult) const
+{
+	FLobbyInfo LobbyInfo;
+
+	LobbyInfo.LobbyId = SearchResult.GetSessionIdStr();
+	LobbyInfo.MaxPlayerCount = SearchResult.Session.SessionSettings.NumPublicConnections;
+	LobbyInfo.CurrentPlayerCount = LobbyInfo.MaxPlayerCount - SearchResult.Session.NumOpenPublicConnections;
+	LobbyInfo.PingInMs = SearchResult.PingInMs;
+
+	SearchResult.Session.SessionSettings.Get(FName("HostName"), LobbyInfo.HostName);
+	SearchResult.Session.SessionSettings.Get(FName("LobbyIsPublic"), LobbyInfo.bIsPublic);
+
+	return LobbyInfo;
+}
+
+/* LOBBY QUERY METHODS */
+
+bool UMultiplayerSessionsSubsystem::IsInLobby() const
+{
+	if (!SessionInterface.IsValid())
+	{
+		return false;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	return Session != nullptr;
+}
+
+FLobbyInfo UMultiplayerSessionsSubsystem::GetCurrentLobbyInfo() const
+{
+	return CreateLobbyInfoFromSession();
+}
+
+bool UMultiplayerSessionsSubsystem::IsLobbyHost() const
+{
+	if (!SessionInterface.IsValid())
+	{
+		return false;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (!Session || !Session->OwningUserId)
+	{
+		return false;
+	}
+
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (!LocalPlayer)
+	{
+		return false;
+	}
+
+	FUniqueNetIdRepl LocalPlayerNetId = LocalPlayer->GetPreferredUniqueNetId();
+	return LocalPlayerNetId.IsValid() && *LocalPlayerNetId == *Session->OwningUserId;
+}
+
+TArray<FLobbyPlayerInfo> UMultiplayerSessionsSubsystem::GetLobbyPlayers() const
+{
+	TArray<FLobbyPlayerInfo> Players;
+	if (!SessionInterface.IsValid())
+	{
+		return Players;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (!Session)
+	{
+		return Players;
+	}
+
+	IOnlineSubsystem* OnlineSubsystem = Online::GetSubsystem(GetWorld());
+	// Get identity interface for player names
+	IOnlineIdentityPtr IdentityInterface =
+		OnlineSubsystem ? OnlineSubsystem->GetIdentityInterface() : nullptr;
+
+	for (const FUniqueNetIdRef& PlayerId : Session->RegisteredPlayers)
+	{
+		FLobbyPlayerInfo PlayerInfo;
+		PlayerInfo.PlayerId = PlayerId->ToString();
+		PlayerInfo.bIsHost = Session->OwningUserId.IsValid() && *PlayerId == *Session->OwningUserId;
+
+		if (IdentityInterface.IsValid())
+		{
+			PlayerInfo.PlayerName = IdentityInterface->GetPlayerNickname(*PlayerId);
+		}
+
+		if (PlayerInfo.PlayerName.IsEmpty())
+		{
+			PlayerInfo.PlayerName = TEXT("Unknown");
+		}
+
+		Players.Add(PlayerInfo);
+	}
+
+	return Players;
+}
+
+FLobbyPlayerInfo UMultiplayerSessionsSubsystem::GetLobbyPlayer(const FUniqueNetId& PlayerId) const
+{
+	FLobbyPlayerInfo FoundPlayerInfo;
+	if (!SessionInterface.IsValid())
+	{
+		return FoundPlayerInfo;
+	}
+
+	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (!Session)
+	{
+		return FoundPlayerInfo;
+	}
+
+	IOnlineSubsystem* OnlineSubsystem = Online::GetSubsystem(GetWorld());
+	IOnlineIdentityPtr IdentityInterface =
+		OnlineSubsystem ? OnlineSubsystem->GetIdentityInterface() : nullptr;
+
+	for (const FUniqueNetIdRef& RegisteredPlayerId : Session->RegisteredPlayers)
+	{
+		if (*RegisteredPlayerId == PlayerId)
+		{
+			FoundPlayerInfo.PlayerId = RegisteredPlayerId->ToString();
+			FoundPlayerInfo.bIsHost = Session->OwningUserId.IsValid() &&
+				*RegisteredPlayerId == *Session->OwningUserId;
+
+			if (IdentityInterface.IsValid())
+			{
+				FoundPlayerInfo.PlayerName = IdentityInterface->GetPlayerNickname(*RegisteredPlayerId);
+			}
+
+			if (FoundPlayerInfo.PlayerName.IsEmpty())
+			{
+				FoundPlayerInfo.PlayerName = TEXT("Unknown");
+			}
+
+			break;
+		}
+	}
+
+	return FoundPlayerInfo;
+}
+
+void UMultiplayerSessionsSubsystem::LeaveLobby()
+{
+	if (!IsInLobby())
+	{
+		return;
+	}
+
+	if (IsLobbyHost())
+	{
+		// STEAM: Host leaving destroys
+		// the lobby for everyone
+		DestroySession();
+	}
+	else
+	{
+		// STEAM: Client leaving removes
+		// it from the lobby
+		DestroySession();
+	}
+}
+
 /* SESSION HANDLERS */
 /* Soon to be deprecated */
 
@@ -541,84 +1023,4 @@ void UMultiplayerSessionsSubsystem::StartSession()
 	{
 		SessionInterface->ClearOnStartSessionCompleteDelegate_Handle(StartSessionCompleteDelegateHandle);
 	}
-}
-
-/* COMMON UTILITIES */
-
-void UMultiplayerSessionsSubsystem::PrintDebugMessage(const FString& Message, bool isError)
-{
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(
-			-1,
-			15.f,
-			isError ? FColor::Red : FColor::Green,
-			Message
-		);
-	}
-}
-
-/* LOBBY UTILITIES */
-FString UMultiplayerSessionsSubsystem::HashPassword(const FString& Password) const
-{
-	// Simple hash using MD5 - sufficient for lobby passwords
-	return FMD5::HashAnsiString(*Password);
-}
-
-bool UMultiplayerSessionsSubsystem::ValidatePassword(const FString& Password, const FString& StoredHash) const
-{
-	if (StoredHash.IsEmpty())
-	{
-		return true;
-	}
-
-	FString InputHash = HashPassword(Password);
-	return InputHash.Equals(StoredHash);
-}
-
-/* Mappers */
-
-FLobbyInfo UMultiplayerSessionsSubsystem::CreateLobbyInfoFromSession() const
-{
-	FLobbyInfo Info;
-
-	if (!SessionInterface.IsValid())
-	{
-		return Info;
-	}
-
-	FNamedOnlineSession* Session = SessionInterface->GetNamedSession(NAME_GameSession);
-	if (!Session)
-	{
-		return Info;
-	}
-
-	Info.LobbyId = Session->GetSessionIdStr();
-	Info.MaxPlayerCount = Session->SessionSettings.NumPublicConnections;
-	Info.CurrentPlayerCount = Info.MaxPlayerCount - Session->NumOpenPublicConnections;
-
-	// Retrieve stored metadata
-	Session->SessionSettings.Get(FName("HostName"), Info.HostName);
-	Session->SessionSettings.Get(FName("LobbyIsPublic"), Info.bIsPublic);
-
-	// Host doesn't have ping to self
-	Info.PingInMs = -1;
-
-	return Info;
-}
-
-FLobbyInfo UMultiplayerSessionsSubsystem::ConvertSearchResultToLobbyInfo(
-	const FOnlineSessionSearchResult& SearchResult) const
-{
-	FLobbyInfo LobbyInfo;
-
-	LobbyInfo.LobbyId = SearchResult.GetSessionIdStr();
-	LobbyInfo.MaxPlayerCount = SearchResult.Session.SessionSettings.NumPublicConnections;
-	LobbyInfo.CurrentPlayerCount = LobbyInfo.MaxPlayerCount - SearchResult.Session.NumOpenPublicConnections;
-	LobbyInfo.PingInMs = SearchResult.PingInMs;
-
-	SearchResult.Session.SessionSettings.Get(FName("HostName"), LobbyInfo.HostName);
-	SearchResult.Session.SessionSettings.Get(FName("LobbyIsPublic"), LobbyInfo.bIsPublic);
-
-	return LobbyInfo;
 }

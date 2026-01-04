@@ -63,6 +63,11 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnHostMigration,
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnLobbySettingsUpdated,
                                             const FLobbyInfo&, UpdatedLobbyInfo);
 
+
+// DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnUnregisterPlayerComplete,
+//                                              const FUniqueNetId&, PlayerId,
+//                                              EOnSessionParticipantLeftReason, Reason);
+
 /**
  * 
  */
@@ -74,20 +79,15 @@ class MULTIPLAYERSESSIONS_API UMultiplayerSessionsSubsystem : public UGameInstan
 public:
 	UMultiplayerSessionsSubsystem();
 
-	// SESSION HANDLERS
-	// ------------------------
-	// These will be called outside the Multiplayer Sessions Subsystem
-	void CreateSession(int32 NumPublicConntections, FString MatchType);
-	void FindSessions(int32 MaxSearchResults);
-	void JoinSession(const FOnlineSessionSearchResult& SessionResult);
-	void DestroySession();
-	void StartSession();
-
 	// LOBBY HANDLERS
 	// -----------------------
 	void CreateLobby(const FLobbySettings& Settings);
 	void FindLobbies(int32 MaxResult = 100);
 	void JoinLobby(const FLobbyInfo& LobbyInfo, const FString& Password = TEXT(""));
+	void UpdateLobbySettings(const FLobbySettings& NewSettings);
+	void SetLobbyVisibility(bool bIsPublic, const FString& Password = TEXT(""));
+	void KickPlayer(const FString& PlayerId, const FString& Reason = TEXT(""));
+	void TransferHost(const FString& NewHostPlayerId);
 
 	// CUSTOM DELEGATES
 	// -----------------------
@@ -109,10 +109,29 @@ public:
 	FMultiplayerOnHostMigration MultiplayerOnHostMigration;
 	FMultiplayerOnLobbySettingsUpdated MultiplayerOnLobbySettingsUpdated;
 
+	// LOBBY QUERY METHODS
+	// ------------------------
+	FLobbyInfo GetCurrentLobbyInfo() const;
+	TArray<FLobbyPlayerInfo> GetLobbyPlayers() const;
+	FLobbyPlayerInfo GetLobbyPlayer(const FUniqueNetId& PlayerId) const;
+	bool IsLobbyHost() const;
+	bool IsInLobby() const;
+	void LeaveLobby();
+
 	// GETTER FUNCTIONS
 	// -----------------------
 	// Getter functions for the Menu Class
 	const FString& GetCachedConnectAddress() const { return CachedConnectAddress; }
+
+	/* DEPRECATED */
+	// SESSION HANDLERS
+	// ------------------------
+	// These will be called outside the Multiplayer Sessions Subsystem
+	void CreateSession(int32 NumPublicConntections, FString MatchType);
+	void FindSessions(int32 MaxSearchResults);
+	void JoinSession(const FOnlineSessionSearchResult& SessionResult);
+	void DestroySession();
+	void StartSession();
 
 protected:
 	// LIFETIME OVERRIDES
@@ -129,6 +148,9 @@ protected:
 	void OnJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result);
 	void OnDestroySessionComplete(FName SessionName, bool bWasSuccessful);
 	void OnStartSessionComplete(FName SessionName, bool bWasSuccessful);
+	void OnUpdateSessionComplete(FName SessionName, bool bWasSuccessful);
+	void OnUnregisterPlayerComplete(FName SessionName, const FUniqueNetId& PlayerId,
+	                                EOnSessionParticipantLeftReason Reason);
 
 private:
 	typedef UMultiplayerSessionsSubsystem ThisClass;
@@ -141,7 +163,7 @@ private:
 
 	// DELEGATES
 	// ------------------------
-	// To add Online Session Interface's delegate list
+	// To add ONLINE SESSION INTERFACE DELEGATE LIST
 	// Internal Multiplayer Sessions Subsystem callbacks will be bound to these delegates
 	FOnCreateSessionCompleteDelegate CreateSessionCompleteDelegate;
 	FDelegateHandle CreateSessionCompleteDelegateHandle;
@@ -153,6 +175,10 @@ private:
 	FDelegateHandle DestroySessionCompleteDelegateHandle;
 	FOnStartSessionCompleteDelegate StartSessionCompleteDelegate;
 	FDelegateHandle StartSessionCompleteDelegateHandle;
+	FOnUpdateSessionCompleteDelegate UpdateSessionCompleteDelegate;
+	FDelegateHandle UpdateSessionCompleteDelegateHandle;
+	FOnSessionParticipantLeftDelegate SessionParticipantLeftDelegate;
+	FDelegateHandle SessionParticipantLeftDelegateHandle;
 
 	// SESSION STATE
 	// Soon will be deprecated
@@ -168,6 +194,8 @@ private:
 	bool bIsLobbyOperation{false};
 	bool bIsLobbySearch{false};
 	bool bIsLobbyJoin{false};
+	TMap<FString, FString> PendingKicks; // PlayerId -> Reason
+	TMap<FString, FLobbyPlayerInfo> PendingKickInfo; // PlayerId -> PlayerInfo (cached before removal)
 
 	// UTILITY FUNCTIONS
 	void PrintDebugMessage(const FString& Message, bool isError);
