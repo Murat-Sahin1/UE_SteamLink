@@ -63,6 +63,11 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnHostMigration,
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMultiplayerOnLobbySettingsUpdated,
                                             const FLobbyInfo&, UpdatedLobbyInfo);
 
+
+// DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMultiplayerOnUnregisterPlayerComplete,
+//                                              const FUniqueNetId&, PlayerId,
+//                                              EOnSessionParticipantLeftReason, Reason);
+
 /**
  * 
  */
@@ -79,6 +84,10 @@ public:
 	void CreateLobby(const FLobbySettings& Settings);
 	void FindLobbies(int32 MaxResult = 100);
 	void JoinLobby(const FLobbyInfo& LobbyInfo, const FString& Password = TEXT(""));
+	void UpdateLobbySettings(const FLobbySettings& NewSettings);
+	void SetLobbyVisibility(bool bIsPublic, const FString& Password = TEXT(""));
+	void KickPlayer(const FString& PlayerId, const FString& Reason = TEXT(""));
+	void TransferHost(const FString& NewHostPlayerId);
 
 	// CUSTOM DELEGATES
 	// -----------------------
@@ -104,6 +113,7 @@ public:
 	// ------------------------
 	FLobbyInfo GetCurrentLobbyInfo() const;
 	TArray<FLobbyPlayerInfo> GetLobbyPlayers() const;
+	FLobbyPlayerInfo GetLobbyPlayer(const FUniqueNetId& PlayerId) const;
 	bool IsLobbyHost() const;
 	bool IsInLobby() const;
 	void LeaveLobby();
@@ -138,6 +148,9 @@ protected:
 	void OnJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result);
 	void OnDestroySessionComplete(FName SessionName, bool bWasSuccessful);
 	void OnStartSessionComplete(FName SessionName, bool bWasSuccessful);
+	void OnUpdateSessionComplete(FName SessionName, bool bWasSuccessful);
+	void OnUnregisterPlayerComplete(FName SessionName, const FUniqueNetId& PlayerId,
+	                                EOnSessionParticipantLeftReason Reason);
 
 private:
 	typedef UMultiplayerSessionsSubsystem ThisClass;
@@ -150,7 +163,7 @@ private:
 
 	// DELEGATES
 	// ------------------------
-	// To add Online Session Interface's delegate list
+	// To add ONLINE SESSION INTERFACE DELEGATE LIST
 	// Internal Multiplayer Sessions Subsystem callbacks will be bound to these delegates
 	FOnCreateSessionCompleteDelegate CreateSessionCompleteDelegate;
 	FDelegateHandle CreateSessionCompleteDelegateHandle;
@@ -162,6 +175,10 @@ private:
 	FDelegateHandle DestroySessionCompleteDelegateHandle;
 	FOnStartSessionCompleteDelegate StartSessionCompleteDelegate;
 	FDelegateHandle StartSessionCompleteDelegateHandle;
+	FOnUpdateSessionCompleteDelegate UpdateSessionCompleteDelegate;
+	FDelegateHandle UpdateSessionCompleteDelegateHandle;
+	FOnSessionParticipantLeftDelegate SessionParticipantLeftDelegate;
+	FDelegateHandle SessionParticipantLeftDelegateHandle;
 
 	// SESSION STATE
 	// Soon will be deprecated
@@ -177,6 +194,8 @@ private:
 	bool bIsLobbyOperation{false};
 	bool bIsLobbySearch{false};
 	bool bIsLobbyJoin{false};
+	TMap<FString, FString> PendingKicks; // PlayerId -> Reason
+	TMap<FString, FLobbyPlayerInfo> PendingKickInfo; // PlayerId -> PlayerInfo (cached before removal)
 
 	// UTILITY FUNCTIONS
 	void PrintDebugMessage(const FString& Message, bool isError);
