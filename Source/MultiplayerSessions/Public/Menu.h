@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "Interfaces/OnlineSessionInterface.h"
+#include "MultiplayerSessionsTypes.h"
 #include "Menu.generated.h"
 
 /**
@@ -36,6 +37,8 @@ protected:
 	void OnDestroySession(bool bWasSuccessful);
 	UFUNCTION()
 	void OnStartSession(bool bWasSuccessful);
+	UFUNCTION()
+	void OnPlayerLeft(const FLobbyPlayerInfo& PlayerInfo, ELobbyLeaveReason LeaveReason);
 
 private:
 	UPROPERTY(meta = (BindWidget))
