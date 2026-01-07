@@ -29,6 +29,17 @@ protected:
 	virtual void NativeDestruct() override;
 
 	// Callbacks for the custom delegates on the Multiplayer Sessions Subsystem
+	/* LOBBY CALLBACKS */
+	UFUNCTION()
+	void OnCreateLobby(bool bWasSuccessful, const FLobbyInfo& LobbyInfo);
+	UFUNCTION()
+	void OnPlayerLeft(const FLobbyPlayerInfo& PlayerInfo, ELobbyLeaveReason LeaveReason);
+	UFUNCTION()
+	void OnKickedFromLobby(FString Reason);
+	UFUNCTION()
+	void OnLobbyListUpdated(const TArray<FLobbyInfo>& LobbyList, bool bWasSuccessful);
+
+	/* DEPRECATED SESSION CALLBACKS */
 	UFUNCTION()
 	void OnCreateSession(bool bWasSuccessful);
 	void OnFindSessions(const TArray<FOnlineSessionSearchResult>& SessionResults, bool bWasSuccessful);
@@ -37,8 +48,6 @@ protected:
 	void OnDestroySession(bool bWasSuccessful);
 	UFUNCTION()
 	void OnStartSession(bool bWasSuccessful);
-	UFUNCTION()
-	void OnPlayerLeft(const FLobbyPlayerInfo& PlayerInfo, ELobbyLeaveReason LeaveReason);
 
 private:
 	UPROPERTY(meta = (BindWidget))

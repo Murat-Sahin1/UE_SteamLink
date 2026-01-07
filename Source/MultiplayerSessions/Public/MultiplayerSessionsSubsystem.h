@@ -151,6 +151,7 @@ protected:
 	void OnUpdateSessionComplete(FName SessionName, bool bWasSuccessful);
 	void OnUnregisterPlayerComplete(FName SessionName, const FUniqueNetId& PlayerId,
 	                                EOnSessionParticipantLeftReason Reason);
+	void OnRegisterPlayerComplete(FName SessionName, const FUniqueNetId& PlayerId);
 
 private:
 	typedef UMultiplayerSessionsSubsystem ThisClass;
@@ -179,6 +180,8 @@ private:
 	FDelegateHandle UpdateSessionCompleteDelegateHandle;
 	FOnSessionParticipantLeftDelegate SessionParticipantLeftDelegate;
 	FDelegateHandle SessionParticipantLeftDelegateHandle;
+	FOnSessionParticipantJoinedDelegate SessionParticipantJoinedDelegate;
+	FDelegateHandle SessionParticipantJoinedDelegateHandle;
 
 	// SESSION STATE
 	// Soon will be deprecated

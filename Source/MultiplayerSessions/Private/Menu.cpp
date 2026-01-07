@@ -40,13 +40,19 @@ void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FStr
 
 	if (MultiplayerSessionsSubsystem)
 	{
+		/* LOBBY CALLBACKS */
+		MultiplayerSessionsSubsystem->MultiplayerOnLobbyCreated.AddDynamic(this, &ThisClass::OnCreateLobby);
+		MultiplayerSessionsSubsystem->MultiplayerOnPlayerLeftLobby.AddDynamic(this, &ThisClass::OnPlayerLeft);
+		MultiplayerSessionsSubsystem->MultiplayerOnKickedFromLobby.AddDynamic(this, &ThisClass::OnKickedFromLobby);
+		MultiplayerSessionsSubsystem->MultiplayerOnLobbyListUpdated.AddDynamic(this, &ThisClass::OnLobbyListUpdated);
+
+		/* DEPRECATED DELEGATES */
 		MultiplayerSessionsSubsystem->MultiplayerOnCreateSessionComplete.AddDynamic(this, &ThisClass::OnCreateSession);
 		MultiplayerSessionsSubsystem->MultiplayerOnFindSessionsComplete.AddUObject(this, &ThisClass::OnFindSessions);
 		MultiplayerSessionsSubsystem->MultiplayerOnJoinSessionComplete.AddUObject(this, &ThisClass::OnJoinSession);
 		MultiplayerSessionsSubsystem->MultiplayerOnDestroySessionComplete.
 		                              AddDynamic(this, &ThisClass::OnDestroySession);
 		MultiplayerSessionsSubsystem->MultiplayerOnStartSessionComplete.AddDynamic(this, &ThisClass::OnStartSession);
-		MultiplayerSessionsSubsystem->MultiplayerOnPlayerLeftLobby.AddDynamic(this, &ThisClass::OnPlayerLeft);
 	}
 }
 
@@ -87,6 +93,172 @@ bool UMenu::Initialize()
 
 	return true;
 }
+
+void UMenu::OnCreateLobby(bool bWasSuccessful, const FLobbyInfo& LobbyInfo)
+{
+	if (bWasSuccessful)
+	{
+		PrintDebugMessage(FString(TEXT("Lobby created successfully!")), false, FColor::Orange);
+
+		UWorld* World = GetWorld();
+		if (World)
+		{
+			World->ServerTravel(PathToLobby);
+			PrintDebugMessage(
+				FString::Printf(
+					TEXT(
+						"HostName: %s, "
+						"LobbyId: %s, "
+						"CurrentPlayerCount: %d, "
+						"MaxPlayerCount: %d, "
+						"PingInMs: %d"),
+					*LobbyInfo.HostName,
+					*LobbyInfo.LobbyId,
+					LobbyInfo.CurrentPlayerCount,
+					LobbyInfo.MaxPlayerCount,
+					LobbyInfo.PingInMs),
+				false);
+		}
+	}
+	else
+	{
+		PrintDebugMessage(FString(TEXT("Failed to create lobby!")), true);
+	}
+}
+
+void UMenu::OnLobbyListUpdated(const TArray<FLobbyInfo>& LobbyList, bool bWasSuccessful)
+{
+	if (MultiplayerSessionsSubsystem == nullptr)
+	{
+		return;
+	}
+
+	if (bWasSuccessful)
+	{
+		// for (auto Result : LobbyList)
+		// {
+		// 	FString SettingsValue;
+		// 	FString Id = Result.GetSessionIdStr();
+		// 	FString User = Result.Session.OwningUserName;
+		//
+		// 	Result.Session.SessionSettings.Get(FName("MatchType"), SettingsValue);
+		//
+		// 	if (SettingsValue == MatchType)
+		// 	{
+		// 		PrintDebugMessage(
+		// 			FString::Printf(
+		// 				TEXT("Found Session Details: ID: %s, Host User: %s"), *Id, *User),
+		// 			false);
+		//
+		// 		// Steam complains about bUseLobbiesIfAvailable and bUsesPresence must match
+		// 		// so changing these in the results, which should NOT be needed!
+		// 		// Joining fails otherwise, though, so doing it for now.
+		// 		Result.Session.SessionSettings.bUseLobbiesIfAvailable = true;
+		// 		Result.Session.SessionSettings.bUsesPresence = true;
+		//
+		// 		MultiplayerSessionsSubsystem->JoinSession(Result);
+		// 		return;
+		// 	}
+		// }
+	}
+	else
+	{
+		if (GEngine)
+		{
+			PrintDebugMessage(
+				FString(TEXT("Find Sessions Failed!")),
+				true);
+		}
+	}
+}
+
+void UMenu::OnPlayerLeft(const FLobbyPlayerInfo& PlayerInfo, ELobbyLeaveReason LeaveReason)
+{
+	switch (LeaveReason)
+	{
+	case ELobbyLeaveReason::Kicked:
+		{
+			PrintDebugMessage(
+				FString::Printf(
+					TEXT("%s is kicked!"), *PlayerInfo.PlayerName),
+				false);
+			break;
+		}
+	case ELobbyLeaveReason::Left:
+		{
+			PrintDebugMessage(
+				FString::Printf(
+					TEXT("%s has left the game!"), *PlayerInfo.PlayerName),
+				false);
+			break;
+		}
+	}
+}
+
+void UMenu::OnKickedFromLobby(FString Reason)
+{
+	PrintDebugMessage(FString("You have been kicked from the lobby"), false);
+}
+
+void UMenu::HostButtonClicked()
+{
+	if (MultiplayerSessionsSubsystem)
+	{
+		PrintDebugMessage(FString(TEXT("Host Button Clicked!")), false, FColor::Yellow);
+
+		FLobbySettings TempSettings;
+		TempSettings.bIsPublic = true;
+		TempSettings.Password = FString(TEXT(""));
+		TempSettings.MaxPlayers = 5;
+
+		MultiplayerSessionsSubsystem->CreateLobby(TempSettings);
+	}
+}
+
+void UMenu::JoinButtonClicked()
+{
+	if (MultiplayerSessionsSubsystem)
+	{
+		PrintDebugMessage(FString(TEXT("Join Button Clicked!")), false, FColor::Yellow);
+		MultiplayerSessionsSubsystem->FindLobbies(100);
+
+		// DEPRECATED
+		// MultiplayerSessionsSubsystem->FindSessions(10000);
+	}
+}
+
+void UMenu::MenuTearDown()
+{
+	// RemoveFromParent();
+	UWorld* World = GetWorld();
+	if (World)
+	{
+		APlayerController* PlayerController = World->GetFirstPlayerController();
+		if (PlayerController)
+		{
+			FInputModeGameOnly InputModeGameOnly;
+			PlayerController->SetInputMode(InputModeGameOnly);
+			PlayerController->SetShowMouseCursor(false);
+		}
+	}
+}
+
+/* UTILITIES */
+
+void UMenu::PrintDebugMessage(const FString& Message, bool isError, const FColor Color)
+{
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			-1,
+			15.f,
+			isError ? FColor::Red : Color,
+			Message
+		);
+	}
+}
+
+/* SOON TO BE DEPRECATED SESSION CALLBACKS */
 
 void UMenu::OnCreateSession(bool bWasSuccessful)
 {
@@ -193,77 +365,5 @@ void UMenu::OnStartSession(bool bWasSuccessful)
 	else
 	{
 		PrintDebugMessage(FString(TEXT("Game couldn't start.")), true);
-	}
-}
-
-void UMenu::OnPlayerLeft(const FLobbyPlayerInfo& PlayerInfo, ELobbyLeaveReason LeaveReason)
-{
-	switch (LeaveReason)
-	{
-	case ELobbyLeaveReason::Kicked:
-		{
-			PrintDebugMessage(
-				FString::Printf(
-					TEXT("%s is kicked!"), *PlayerInfo.PlayerName),
-				false);
-			break;
-		}
-	case ELobbyLeaveReason::Left:
-		{
-			PrintDebugMessage(
-				FString::Printf(
-					TEXT("%s has left the game!"), *PlayerInfo.PlayerName),
-				false);
-			break;
-		}
-	}
-}
-
-void UMenu::HostButtonClicked()
-{
-	if (MultiplayerSessionsSubsystem)
-	{
-		PrintDebugMessage(FString(TEXT("Host Button Clicked!")), false, FColor::Yellow);
-		MultiplayerSessionsSubsystem->CreateSession(NumPublicConnections, MatchType);
-	}
-}
-
-void UMenu::JoinButtonClicked()
-{
-	if (MultiplayerSessionsSubsystem)
-	{
-		PrintDebugMessage(FString(TEXT("Join Button Clicked!")), false, FColor::Yellow);
-		MultiplayerSessionsSubsystem->FindSessions(10000);
-	}
-}
-
-void UMenu::MenuTearDown()
-{
-	// RemoveFromParent();
-	UWorld* World = GetWorld();
-	if (World)
-	{
-		APlayerController* PlayerController = World->GetFirstPlayerController();
-		if (PlayerController)
-		{
-			FInputModeGameOnly InputModeGameOnly;
-			PlayerController->SetInputMode(InputModeGameOnly);
-			PlayerController->SetShowMouseCursor(false);
-		}
-	}
-}
-
-/* UTILITIES */
-
-void UMenu::PrintDebugMessage(const FString& Message, bool isError, const FColor Color)
-{
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(
-			-1,
-			15.f,
-			isError ? FColor::Red : Color,
-			Message
-		);
 	}
 }
