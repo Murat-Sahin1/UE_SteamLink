@@ -45,6 +45,7 @@ void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FStr
 		MultiplayerSessionsSubsystem->MultiplayerOnPlayerLeftLobby.AddDynamic(this, &ThisClass::OnPlayerLeft);
 		MultiplayerSessionsSubsystem->MultiplayerOnKickedFromLobby.AddDynamic(this, &ThisClass::OnKickedFromLobby);
 		MultiplayerSessionsSubsystem->MultiplayerOnLobbyListUpdated.AddDynamic(this, &ThisClass::OnLobbyListUpdated);
+		MultiplayerSessionsSubsystem->MultiplayerOnPlayerJoinedLobby.AddDynamic(this, &ThisClass::OnPlayerJoinedLobby);
 
 		/* DEPRECATED DELEGATES */
 		MultiplayerSessionsSubsystem->MultiplayerOnCreateSessionComplete.AddDynamic(this, &ThisClass::OnCreateSession);
@@ -98,7 +99,7 @@ void UMenu::OnCreateLobby(bool bWasSuccessful, const FLobbyInfo& LobbyInfo)
 {
 	if (bWasSuccessful)
 	{
-		PrintDebugMessage(FString(TEXT("Lobby created successfully!")), false, FColor::Orange);
+		PrintDebugMessage(FString(TEXT("Lobby created successfully!")), false, FColor::Purple);
 
 		UWorld* World = GetWorld();
 		if (World)
@@ -135,40 +136,34 @@ void UMenu::OnLobbyListUpdated(const TArray<FLobbyInfo>& LobbyList, bool bWasSuc
 
 	if (bWasSuccessful)
 	{
-		// for (auto Result : LobbyList)
-		// {
-		// 	FString SettingsValue;
-		// 	FString Id = Result.GetSessionIdStr();
-		// 	FString User = Result.Session.OwningUserName;
-		//
-		// 	Result.Session.SessionSettings.Get(FName("MatchType"), SettingsValue);
-		//
-		// 	if (SettingsValue == MatchType)
-		// 	{
-		// 		PrintDebugMessage(
-		// 			FString::Printf(
-		// 				TEXT("Found Session Details: ID: %s, Host User: %s"), *Id, *User),
-		// 			false);
-		//
-		// 		// Steam complains about bUseLobbiesIfAvailable and bUsesPresence must match
-		// 		// so changing these in the results, which should NOT be needed!
-		// 		// Joining fails otherwise, though, so doing it for now.
-		// 		Result.Session.SessionSettings.bUseLobbiesIfAvailable = true;
-		// 		Result.Session.SessionSettings.bUsesPresence = true;
-		//
-		// 		MultiplayerSessionsSubsystem->JoinSession(Result);
-		// 		return;
-		// 	}
-		// }
+		if (LobbyList.Num() == 0)
+		{
+			PrintDebugMessage(TEXT("No lobbies found."), false, FColor::Yellow);
+			return;
+		}
+
+		PrintDebugMessage(
+			FString::Printf(TEXT("Found %d lobby(s):"), LobbyList.Num()),
+			false, FColor::Green);
+
+		for (int32 i = 0; i < LobbyList.Num(); i++)
+		{
+			const FLobbyInfo& Lobby = LobbyList[i];
+			PrintDebugMessage(
+				FString::Printf(
+					TEXT("[%d] Host: %s | Players: %d/%d | Ping: %dms | %s"),
+					i + 1,
+					*Lobby.HostName,
+					Lobby.CurrentPlayerCount,
+					Lobby.MaxPlayerCount,
+					Lobby.PingInMs,
+					Lobby.bIsPublic ? TEXT("Public") : TEXT("Private")),
+				false, FColor::Cyan);
+		}
 	}
 	else
 	{
-		if (GEngine)
-		{
-			PrintDebugMessage(
-				FString(TEXT("Find Sessions Failed!")),
-				true);
-		}
+		PrintDebugMessage(TEXT("Find Lobbies failed."), true);
 	}
 }
 
@@ -264,7 +259,7 @@ void UMenu::OnCreateSession(bool bWasSuccessful)
 {
 	if (bWasSuccessful)
 	{
-		PrintDebugMessage(FString(TEXT("Session created successfully!")), false, FColor::Orange);
+		PrintDebugMessage(FString(TEXT("Session created successfully!")), false, FColor::Yellow);
 
 		UWorld* World = GetWorld();
 		if (World)
@@ -360,10 +355,26 @@ void UMenu::OnStartSession(bool bWasSuccessful)
 {
 	if (bWasSuccessful)
 	{
-		PrintDebugMessage(FString(TEXT("Game is on!")), false, FColor::Emerald);
+		PrintDebugMessage(FString(TEXT("Game is on!")), false, FColor::Yellow);
 	}
 	else
 	{
 		PrintDebugMessage(FString(TEXT("Game couldn't start.")), true);
+	}
+}
+
+void UMenu::OnPlayerJoinedLobby(const FLobbyPlayerInfo& playerInfo)
+{
+	if (playerInfo.PlayerName.IsEmpty())
+	{
+		PrintDebugMessage(
+			FString::Printf(
+				TEXT(
+					"New Player Joined!, \n"
+					"PlayerId: %s, "
+					"PlayerName: %s, "),
+				*playerInfo.PlayerId,
+				*playerInfo.PlayerName),
+			false, FColor::Yellow);
 	}
 }

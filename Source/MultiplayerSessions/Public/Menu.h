@@ -48,6 +48,8 @@ protected:
 	void OnDestroySession(bool bWasSuccessful);
 	UFUNCTION()
 	void OnStartSession(bool bWasSuccessful);
+	UFUNCTION()
+	void OnPlayerJoinedLobby(const FLobbyPlayerInfo& playerInfo);
 
 private:
 	UPROPERTY(meta = (BindWidget))
