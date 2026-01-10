@@ -48,6 +48,7 @@ protected:
 	void OnPublicCheckBoxChanged(bool bIsChecked);
 
 	/** Callback from subsystem */
+	UFUNCTION()
 	void OnLobbyCreated(bool bWasSuccessful, const FLobbyInfo& LobbyInfo);
 
 private:
