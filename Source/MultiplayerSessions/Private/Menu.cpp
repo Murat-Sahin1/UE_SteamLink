@@ -1,9 +1,12 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "Menu.h"
-
 #include "MultiplayerSessionsSubsystem.h"
+#include "CreateLobbyWidget.h"
+#include "LobbyListWidget.h"
+#include "PasswordInputWidget.h"
 #include "Components/Button.h"
+#include "Components/WidgetSwitcher.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "OnlineSessionSettings.h"
@@ -46,6 +49,7 @@ void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FStr
 		MultiplayerSessionsSubsystem->MultiplayerOnKickedFromLobby.AddDynamic(this, &ThisClass::OnKickedFromLobby);
 		MultiplayerSessionsSubsystem->MultiplayerOnLobbyListUpdated.AddDynamic(this, &ThisClass::OnLobbyListUpdated);
 		MultiplayerSessionsSubsystem->MultiplayerOnPlayerJoinedLobby.AddDynamic(this, &ThisClass::OnPlayerJoinedLobby);
+		MultiplayerSessionsSubsystem->MultiplayerOnLobbyJoinComplete.AddDynamic(this, &ThisClass::OnLobbyJoinComplete);
 
 		/* DEPRECATED DELEGATES */
 		MultiplayerSessionsSubsystem->MultiplayerOnCreateSessionComplete.AddDynamic(this, &ThisClass::OnCreateSession);
@@ -54,6 +58,29 @@ void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FStr
 		MultiplayerSessionsSubsystem->MultiplayerOnDestroySessionComplete.
 		                              AddDynamic(this, &ThisClass::OnDestroySession);
 		MultiplayerSessionsSubsystem->MultiplayerOnStartSessionComplete.AddDynamic(this, &ThisClass::OnStartSession);
+
+		// Setup child widgets
+		if (CreateLobbyWidget)
+		{
+			CreateLobbyWidget->Setup(MultiplayerSessionsSubsystem);
+			CreateLobbyWidget->OnLobbyCreationComplete.AddDynamic(this, &ThisClass::OnLobbyCreationComplete);
+		}
+
+		if (LobbyListWidget)
+		{
+			LobbyListWidget->Setup(MultiplayerSessionsSubsystem);
+			LobbyListWidget->OnLobbySelected.AddDynamic(this, &ThisClass::OnLobbySelected);
+			LobbyListWidget->OnBackButtonPressed.AddDynamic(this, &ThisClass::OnBackButtonPressed);
+		}
+
+		if (PasswordInputWidget)
+		{
+			PasswordInputWidget->OnPasswordSubmitted.AddDynamic(this, &ThisClass::OnPasswordSubmitted);
+			PasswordInputWidget->OnPasswordCancelled.AddDynamic(this, &ThisClass::OnPasswordCancelled);
+		}
+
+		// Start on main menu view
+		SwitchToView(EMenuView::MainMenu);
 	}
 }
 
@@ -61,6 +88,17 @@ void UMenu::NativeDestruct()
 {
 	if (MultiplayerSessionsSubsystem)
 	{
+		// Unbind lobby delegates
+		MultiplayerSessionsSubsystem->MultiplayerOnLobbyCreated.RemoveDynamic(this, &ThisClass::OnCreateLobby);
+		MultiplayerSessionsSubsystem->MultiplayerOnPlayerLeftLobby.RemoveDynamic(this, &ThisClass::OnPlayerLeft);
+		MultiplayerSessionsSubsystem->MultiplayerOnKickedFromLobby.RemoveDynamic(this, &ThisClass::OnKickedFromLobby);
+		MultiplayerSessionsSubsystem->MultiplayerOnLobbyListUpdated.RemoveDynamic(this, &ThisClass::OnLobbyListUpdated);
+		MultiplayerSessionsSubsystem->MultiplayerOnPlayerJoinedLobby.RemoveDynamic(
+			this, &ThisClass::OnPlayerJoinedLobby);
+		MultiplayerSessionsSubsystem->MultiplayerOnLobbyJoinComplete.RemoveDynamic(
+			this, &ThisClass::OnLobbyJoinComplete);
+
+		// Deprecated
 		MultiplayerSessionsSubsystem->MultiplayerOnCreateSessionComplete.RemoveDynamic(
 			this, &ThisClass::OnCreateSession);
 		MultiplayerSessionsSubsystem->MultiplayerOnFindSessionsComplete.RemoveAll(this);
@@ -68,8 +106,26 @@ void UMenu::NativeDestruct()
 		MultiplayerSessionsSubsystem->MultiplayerOnDestroySessionComplete.RemoveDynamic(
 			this, &ThisClass::OnDestroySession);
 		MultiplayerSessionsSubsystem->MultiplayerOnStartSessionComplete.RemoveDynamic(this, &ThisClass::OnStartSession);
-		MultiplayerSessionsSubsystem->MultiplayerOnPlayerLeftLobby.RemoveDynamic(this, &ThisClass::OnPlayerLeft);
 	}
+
+	// Unbind widget delegates
+	if (CreateLobbyWidget)
+	{
+		CreateLobbyWidget->OnLobbyCreationComplete.RemoveDynamic(this, &ThisClass::OnLobbyCreationComplete);
+	}
+
+	if (LobbyListWidget)
+	{
+		LobbyListWidget->OnLobbySelected.RemoveDynamic(this, &ThisClass::OnLobbySelected);
+		LobbyListWidget->OnBackButtonPressed.RemoveDynamic(this, &ThisClass::OnBackButtonPressed);
+	}
+
+	if (PasswordInputWidget)
+	{
+		PasswordInputWidget->OnPasswordSubmitted.RemoveDynamic(this, &ThisClass::OnPasswordSubmitted);
+		PasswordInputWidget->OnPasswordCancelled.RemoveDynamic(this, &ThisClass::OnPasswordCancelled);
+	}
+
 	MenuTearDown();
 	Super::NativeDestruct();
 }
@@ -93,6 +149,204 @@ bool UMenu::Initialize()
 	}
 
 	return true;
+}
+
+// Button Handlers
+void UMenu::HostButtonClicked()
+{
+	PrintDebugMessage(FString(TEXT("Host Button Clicked!")), false, FColor::Yellow);
+	SwitchToView(EMenuView::CreateLobby);
+}
+
+void UMenu::JoinButtonClicked()
+{
+	PrintDebugMessage(FString(TEXT("Join Button Clicked!")), false, FColor::Yellow);
+	SwitchToView(EMenuView::LobbyBrowser);
+
+	// Trigger lobby search
+	if (LobbyListWidget)
+	{
+		LobbyListWidget->RefreshLobbyList();
+	}
+}
+
+// Widget Callback Handlers
+void UMenu::OnLobbyCreationComplete(bool bSuccess)
+{
+	if (bSuccess)
+	{
+		// Lobby created successfully - server travel happens in OnCreateLobby callback
+		PrintDebugMessage(TEXT("Navigating to lobby..."), false, FColor::Green);
+	}
+	else
+	{
+		// User cancelled or creation failed - return to main menu
+		SwitchToView(EMenuView::MainMenu);
+	}
+}
+
+void UMenu::OnLobbySelected(const FLobbyInfo& SelectedLobby)
+{
+	CurrentSelectedLobby = SelectedLobby;
+
+	if (SelectedLobby.bIsPublic)
+	{
+		// Public lobby - join directly without password
+		JoinSelectedLobby(SelectedLobby, TEXT(""));
+	}
+	else
+	{
+		// Private lobby - show password dialog
+		if (PasswordInputWidget)
+		{
+			PasswordInputWidget->ShowForLobby(SelectedLobby);
+		}
+	}
+}
+
+void UMenu::OnBackButtonPressed()
+{
+	SwitchToView(EMenuView::MainMenu);
+}
+
+void UMenu::OnPasswordSubmitted(const FLobbyInfo& LobbyInfo, const FString& Password)
+{
+	JoinSelectedLobby(LobbyInfo, Password);
+}
+
+void UMenu::OnPasswordCancelled()
+{
+	// User cancelled password input - stay on lobby browser
+	PrintDebugMessage(TEXT("Password entry cancelled"), false, FColor::Yellow);
+}
+
+// Join Flow Methods
+void UMenu::JoinSelectedLobby(const FLobbyInfo& LobbyInfo, const FString& Password)
+{
+	if (!MultiplayerSessionsSubsystem)
+	{
+		PrintDebugMessage(TEXT("Session subsystem not available"), true);
+		return;
+	}
+
+	PrintDebugMessage(
+		FString::Printf(TEXT("Attempting to join %s's lobby..."), *LobbyInfo.HostName),
+		false, FColor::Cyan);
+
+	// Call subsystem to join lobby
+	MultiplayerSessionsSubsystem->JoinLobby(LobbyInfo, Password);
+}
+
+void UMenu::OnLobbyJoinComplete(ELobbyJoinResult Result)
+{
+	switch (Result)
+	{
+	case ELobbyJoinResult::Success:
+		PrintDebugMessage(TEXT("Successfully joined lobby!"), false, FColor::Green);
+
+		// Hide password dialog if it's open
+		if (PasswordInputWidget)
+		{
+			PasswordInputWidget->Hide();
+		}
+
+		// Travel to lobby level
+		TravelToLobby();
+		break;
+
+	case ELobbyJoinResult::WrongPassword:
+		PrintDebugMessage(TEXT("Incorrect password"), true);
+
+		// Keep password dialog open, show error
+		if (PasswordInputWidget)
+		{
+			PasswordInputWidget->ShowError(TEXT("Incorrect password. Please try again."));
+		}
+		break;
+
+	case ELobbyJoinResult::LobbyFull:
+		PrintDebugMessage(TEXT("Lobby is full"), true);
+
+		// Hide password dialog
+		if (PasswordInputWidget)
+		{
+			PasswordInputWidget->Hide();
+		}
+		break;
+
+	case ELobbyJoinResult::LobbyNotFound:
+		PrintDebugMessage(TEXT("Lobby no longer exists"), true);
+
+		// Hide password dialog
+		if (PasswordInputWidget)
+		{
+			PasswordInputWidget->Hide();
+		}
+
+		// Refresh lobby list
+		if (LobbyListWidget)
+		{
+			LobbyListWidget->RefreshLobbyList();
+		}
+		break;
+
+	case ELobbyJoinResult::ConnectionFailed:
+	case ELobbyJoinResult::UnknownError:
+	default:
+		PrintDebugMessage(TEXT("Failed to connect to lobby"), true);
+
+		// Hide password dialog
+		if (PasswordInputWidget)
+		{
+			PasswordInputWidget->Hide();
+		}
+		break;
+	}
+}
+
+// Travel Lobby Method
+void UMenu::TravelToLobby()
+{
+	if (!MultiplayerSessionsSubsystem)
+	{
+		PrintDebugMessage(TEXT("Cannot travel - subsystem not available"), true);
+		return;
+	}
+
+	FString ConnectAddress = MultiplayerSessionsSubsystem->GetCachedConnectAddress();
+
+	if (ConnectAddress.IsEmpty())
+	{
+		PrintDebugMessage(TEXT("Failed to get server address"), true);
+		return;
+	}
+
+	PrintDebugMessage(
+		FString::Printf(TEXT("Traveling to: %s"), *ConnectAddress),
+		false, FColor::Purple);
+
+	// Clean up menu
+	MenuTearDown();
+
+	// Travel as client
+	UWorld* World = GetWorld();
+	if (World)
+	{
+		APlayerController* PlayerController = World->GetFirstPlayerController();
+		if (PlayerController)
+		{
+			PlayerController->ClientTravel(ConnectAddress, ETravelType::TRAVEL_Absolute);
+		}
+	}
+}
+
+// View Switching
+void UMenu::SwitchToView(EMenuView View)
+{
+	if (MenuSwitcher)
+	{
+		MenuSwitcher->SetActiveWidgetIndex(static_cast<int32>(View));
+	}
 }
 
 void UMenu::OnCreateLobby(bool bWasSuccessful, const FLobbyInfo& LobbyInfo)
@@ -187,6 +441,8 @@ void UMenu::OnPlayerLeft(const FLobbyPlayerInfo& PlayerInfo, ELobbyLeaveReason L
 				false);
 			break;
 		}
+	default:
+		break;
 	}
 }
 
@@ -195,30 +451,19 @@ void UMenu::OnKickedFromLobby(FString Reason)
 	PrintDebugMessage(FString("You have been kicked from the lobby"), false);
 }
 
-void UMenu::HostButtonClicked()
+void UMenu::OnPlayerJoinedLobby(const FLobbyPlayerInfo& PlayerInfo)
 {
-	if (MultiplayerSessionsSubsystem)
+	if (!PlayerInfo.PlayerName.IsEmpty())
 	{
-		PrintDebugMessage(FString(TEXT("Host Button Clicked!")), false, FColor::Yellow);
-
-		FLobbySettings TempSettings;
-		TempSettings.bIsPublic = true;
-		TempSettings.Password = FString(TEXT(""));
-		TempSettings.MaxPlayers = 5;
-
-		MultiplayerSessionsSubsystem->CreateLobby(TempSettings);
-	}
-}
-
-void UMenu::JoinButtonClicked()
-{
-	if (MultiplayerSessionsSubsystem)
-	{
-		PrintDebugMessage(FString(TEXT("Join Button Clicked!")), false, FColor::Yellow);
-		MultiplayerSessionsSubsystem->FindLobbies(100);
-
-		// DEPRECATED
-		// MultiplayerSessionsSubsystem->FindSessions(10000);
+		PrintDebugMessage(
+			FString::Printf(
+				TEXT(
+					"New Player Joined!, \n"
+					"PlayerId: %s, "
+					"PlayerName: %s, "),
+				*PlayerInfo.PlayerId,
+				*PlayerInfo.PlayerName),
+			false, FColor::Yellow);
 	}
 }
 
@@ -253,8 +498,7 @@ void UMenu::PrintDebugMessage(const FString& Message, bool isError, const FColor
 	}
 }
 
-/* SOON TO BE DEPRECATED SESSION CALLBACKS */
-
+/* DEPRECATED SESSION CALLBACKS */
 void UMenu::OnCreateSession(bool bWasSuccessful)
 {
 	if (bWasSuccessful)
@@ -297,9 +541,6 @@ void UMenu::OnFindSessions(const TArray<FOnlineSessionSearchResult>& SessionResu
 						TEXT("Found Session Details: ID: %s, Host User: %s"), *Id, *User),
 					false);
 
-				// Steam complains about bUseLobbiesIfAvailable and bUsesPresence must match
-				// so changing these in the results, which should NOT be needed!
-				// Joining fails otherwise, though, so doing it for now.
 				Result.Session.SessionSettings.bUseLobbiesIfAvailable = true;
 				Result.Session.SessionSettings.bUsesPresence = true;
 
@@ -310,12 +551,9 @@ void UMenu::OnFindSessions(const TArray<FOnlineSessionSearchResult>& SessionResu
 	}
 	else
 	{
-		if (GEngine)
-		{
-			PrintDebugMessage(
-				FString(TEXT("Find Sessions Failed!")),
-				true);
-		}
+		PrintDebugMessage(
+			FString(TEXT("Find Sessions Failed!")),
+			true);
 	}
 }
 
@@ -330,7 +568,7 @@ void UMenu::OnJoinSession(EOnJoinSessionCompleteResult::Type Result)
 
 		FString Address = MultiplayerSessionsSubsystem->GetCachedConnectAddress();
 		PrintDebugMessage(
-			FString::Printf(TEXT("Found Session's Conntect String: %s"), *Address),
+			FString::Printf(TEXT("Found Session's Connect String: %s"), *Address),
 			false);
 
 		UGameInstance* GameInstance = GetGameInstance();
@@ -360,21 +598,5 @@ void UMenu::OnStartSession(bool bWasSuccessful)
 	else
 	{
 		PrintDebugMessage(FString(TEXT("Game couldn't start.")), true);
-	}
-}
-
-void UMenu::OnPlayerJoinedLobby(const FLobbyPlayerInfo& playerInfo)
-{
-	if (playerInfo.PlayerName.IsEmpty())
-	{
-		PrintDebugMessage(
-			FString::Printf(
-				TEXT(
-					"New Player Joined!, \n"
-					"PlayerId: %s, "
-					"PlayerName: %s, "),
-				*playerInfo.PlayerId,
-				*playerInfo.PlayerName),
-			false, FColor::Yellow);
 	}
 }
