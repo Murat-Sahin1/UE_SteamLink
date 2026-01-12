@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## Roadmap
+
+### Next: Lobby Level
+
+Core lobby gameplay features before players enter the match.
+
+- **Ready-Up System** - Players indicate readiness, host can start when all ready
+- **Kick Player UI** - Host can remove players from the lobby
+- **Lobby Level Design** - TBD (dashboard UI vs 3D in-game lobby)
+
+---
+
+## [0.3.1] - 2026-01-13
+
+### Fixed
+
+- **Ghost Lobby Issue** - Complete fix for stale Steam lobbies after host crash/ALT+F4
+
+  - Host no longer sees their own ghost lobby after restarting (filter by OwningUserId regardless of active session)
+  - Client session now properly cleaned up when disconnected from host
+  - Stale client sessions automatically destroyed before lobby search
+  - Empty connect address detection triggers automatic cleanup
+  - Search cache invalidated after failed join attempts
+
+### Added
+
+- `CleanupAfterFailedJoin()` - Public method to clean up session state after failed travel
+- `PerformFindLobbies()` - Internal helper for search after stale session cleanup
+- Pending search queue for seamless search after automatic cleanup
+
+### Technical
+
+- `OnUnregisterPlayerComplete` now calls cleanup when local player is removed
+- `FindLobbies` checks for stale non-host sessions before searching
+- `OnJoinSessionComplete` detects empty connect addresses as ghost lobby indicator
+
+---
+
 ## [0.3.0] - 2026-01-12
 
 ### Added
