@@ -6,6 +6,88 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.0] - 2026-01-12
+
+### Added
+
+- **Complete Lobby UI System**
+
+  - `CreateLobbyWidget` - Configurable lobby creation form
+
+    - Max players selection (2-16 via spin box)
+    - Public/Private lobby toggle with real-time password field visibility
+    - Password input with validation (min 4 characters for private lobbies)
+    - Input validation with error feedback
+    - Loading state during creation
+    - Cancel and Create buttons with proper state management
+
+  - `LobbyListWidget` - Scrollable lobby browser
+
+    - Real-time lobby search and display
+    - Refresh button for manual search
+    - Loading indicator during search
+    - Empty state messaging
+    - Status text showing lobby count
+    - Back button navigation to main menu
+
+  - `LobbyEntryWidget` - Individual lobby row display
+
+    - Host name, player count (e.g., "3/5"), and ping display
+    - Lock icon for private lobbies
+    - Hover effects for visual feedback
+    - Visual distinction between public and private lobbies
+    - Click-to-join functionality
+
+  - `PasswordInputWidget` - Modal password entry dialog
+    - Context-aware display (shows target lobby host name)
+    - Masked password input field
+    - Real-time password validation
+    - Dynamic join button state (enabled only when valid)
+    - Error display for incorrect passwords
+    - Cancel functionality
+
+- **Menu System Integration**
+
+  - WidgetSwitcher-based view management
+  - Three distinct views: Main Menu, Create Lobby, Lobby Browser
+  - Enum-based view switching for type safety
+  - Seamless transitions between views
+
+- **Complete Join Flow**
+  - Public lobby direct join (no password required)
+  - Private lobby password prompt
+  - Comprehensive error handling:
+    - Success → Client travel to lobby level
+    - Wrong Password → Keep dialog open, show error
+    - Lobby Full → Close dialog, display error message
+    - Lobby Not Found → Auto-refresh lobby list
+    - Connection Failed → Generic error feedback
+  - Client travel implementation after successful join
+
+### Changed
+
+- **Menu Widget** - Complete overhaul
+  - Migrated from simple button panel to full WidgetSwitcher architecture
+  - Added widget lifecycle management (Setup/Construct/Destruct)
+  - Integrated all child widgets with delegate-based communication
+  - BindWidget pattern for type-safe UI references
+
+### Fixed
+
+- Widget alignment issues in MenuSwitcher
+- Blueprint serialization errors during packaging
+- Password visibility toggle logic in CreateLobbyWidget
+- Proper delegate cleanup in all widget destructors
+
+### Technical
+
+- Architecture: Delegate-based widget communication
+- Pattern: BindWidget for type-safe references
+- Lifecycle: Proper Setup/NativeConstruct/NativeDestruct flow
+- Testing: Verified with NULL OSS (editor) and Steam OSS (packaged builds)
+
+---
+
 ## [0.2.5] - 2026-01-04
 
 ### Added
