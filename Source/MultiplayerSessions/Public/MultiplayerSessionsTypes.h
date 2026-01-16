@@ -85,8 +85,12 @@ struct MULTIPLAYERSESSIONS_API FLobbyPlayerInfo
 	UPROPERTY(BlueprintReadOnly, Category = "Lobby")
 	bool bIsHost;
 
+	UPROPERTY(BlueprintReadOnly, Category = "Lobby")
+	bool bIsReady;
+
 	FLobbyPlayerInfo() :
-		bIsHost(false)
+		bIsHost(false),
+		bIsReady(false)
 	{
 	}
 };

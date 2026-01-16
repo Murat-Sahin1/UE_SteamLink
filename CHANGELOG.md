@@ -10,11 +10,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Next: Lobby Level
 
-Core lobby gameplay features before players enter the match.
-
-- **Ready-Up System** - Players indicate readiness, host can start when all ready
 - **Kick Player UI** - Host can remove players from the lobby
 - **Lobby Level Design** - TBD (dashboard UI vs 3D in-game lobby)
+
+---
+
+## [0.4.0] - 2026-01-14
+
+### Added
+
+- **Ready-Up System** - Complete replicated ready state for lobby players
+
+  - `ALobbyPlayerState` - Custom PlayerState with replicated `bIsReady`
+    - `SetReadyState()` / `ToggleReadyState()` - Toggle ready status
+    - `IsReady()` - Query ready state
+    - `OnReadyStateChanged` delegate - Local notification
+    - Server RPC for client-to-server state changes
+
+  - `ALobbyGameState` - Custom GameState for lobby queries
+    - `AreAllPlayersReady()` - Check if all players ready
+    - `GetReadyPlayerCount()` / `GetTotalPlayerCount()` - Player counts
+    - `GetLobbyPlayerStates()` - Get all lobby player states
+    - `OnPlayerReadyStateChanged` delegate - Global notification
+
+  - `ALobbyGameMode` updates
+    - Uses `ALobbyPlayerState` and `ALobbyGameState`
+    - `StartGame(GameLevelPath)` - Server travel when all ready
+    - `CanStartGame()` - Query if game can start
+    - `OnAllPlayersReady` / `OnNotAllPlayersReady` delegates
+
+- Added `bIsReady` to `FLobbyPlayerInfo` struct
+
+### Fixed
+
+- Removed incorrect `DefaultPawnClass` assignment in LobbyGameMode
+
+### Technical
+
+- Full replication support using `DOREPLIFETIME` and `ReplicatedUsing`
+- Server authoritative ready state with client RPC requests
+- Delegate chain: PlayerState → GameState → GameMode for ready notifications
 
 ---
 

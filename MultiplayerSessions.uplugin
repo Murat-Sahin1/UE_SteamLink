@@ -1,7 +1,7 @@
 {
   "FileVersion": 3,
-  "Version": 31,
-  "VersionName": "0.3.1",
+  "Version": 40,
+  "VersionName": "0.4.0",
   "FriendlyName": "MultiplayerSessions",
   "Description": "A plugin for handling online multiplayer lobbies.",
   "Category": "Other",
