@@ -118,6 +118,13 @@ public:
 	bool IsInLobby() const;
 	void LeaveLobby();
 
+	/**
+	 * Call this after a failed ClientTravel to clean up the local session state.
+	 * This prevents "ghost session" issues where a join succeeded but travel failed.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Lobby")
+	void CleanupAfterFailedJoin();
+
 	// GETTER FUNCTIONS
 	// -----------------------
 	// Getter functions for the Menu Class
@@ -192,13 +199,21 @@ private:
 
 	// LOBBY STATE
 	// ------------------------
-	bool bCreateLobbyOnDestroy{false};
+	// Initialization state
+	bool bIsInitializing = false;
+	bool bInitializationComplete = false;
+
+	bool bHasPendingLobbyCreation{false};
 	FLobbySettings PendingLobbySettings;
 	bool bIsLobbyOperation{false};
 	bool bIsLobbySearch{false};
 	bool bIsLobbyJoin{false};
 	TMap<FString, FString> PendingKicks; // PlayerId -> Reason
 	TMap<FString, FLobbyPlayerInfo> PendingKickInfo; // PlayerId -> PlayerInfo (cached before removal)
+
+	// Pending search after stale session cleanup
+	bool bHasPendingSearch{false};
+	int32 PendingSearchMaxResults{100};
 
 	// UTILITY FUNCTIONS
 	void PrintDebugMessage(const FString& Message, bool isError);
@@ -209,4 +224,7 @@ private:
 	bool ValidatePassword(const FString& Password, const FString& StoredHash) const;
 	FLobbyInfo CreateLobbyInfoFromSession() const;
 	FLobbyInfo ConvertSearchResultToLobbyInfo(const FOnlineSessionSearchResult& SearchResult) const;
+
+	/** Internal method to perform lobby search after cleanup */
+	void PerformFindLobbies(int32 MaxResult);
 };
