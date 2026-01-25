@@ -42,7 +42,8 @@ public class MultiplayerSessions : ModuleRules
 				"Engine",
 				"Slate",
 				"SlateCore",
-                "UMG"
+				"UMG",
+				"NetCore"
 				// ... add private dependencies that you statically link with here ...	
 			}
 		);
