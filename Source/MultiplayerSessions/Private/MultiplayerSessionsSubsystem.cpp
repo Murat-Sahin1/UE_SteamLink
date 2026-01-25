@@ -80,6 +80,27 @@ void UMultiplayerSessionsSubsystem::Initialize(FSubsystemCollectionBase& Collect
 				SessionParticipantJoinedDelegate
 			);
 	}
+
+	// Clean up any ghost sessions from previous crashes
+	if (SessionInterface.IsValid())
+	{
+		FNamedOnlineSession* ExistingSession = SessionInterface->GetNamedSession(NAME_GameSession);
+		if (ExistingSession)
+		{
+			// Destroy ghost session without broadcasting (silent cleanup)
+			bIsInitializing = true;
+			UE_LOG(LogTemp, Warning, TEXT("Found ghost session on startup, cleaning up..."));
+
+			// Bind delegate to know when cleanup completes
+			DestroySessionCompleteDelegateHandle = SessionInterface->AddOnDestroySessionCompleteDelegate_Handle(
+				DestroySessionCompleteDelegate);
+
+			SessionInterface->DestroySession(NAME_GameSession);
+			return; // Don't set complete flag yet
+		}
+	}
+
+	bInitializationComplete = true;
 }
 
 void UMultiplayerSessionsSubsystem::Deinitialize()
@@ -90,7 +111,16 @@ void UMultiplayerSessionsSubsystem::Deinitialize()
 	{
 		SessionInterface->ClearOnSessionParticipantLeftDelegate_Handle(SessionParticipantLeftDelegateHandle);
 		SessionInterface->ClearOnSessionParticipantJoinedDelegate_Handle(SessionParticipantJoinedDelegateHandle);
+
+		// Clean up session on proper shutdown
+		FNamedOnlineSession* ExistingSession = SessionInterface->GetNamedSession(NAME_GameSession);
+		if (ExistingSession)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Destroying session on shutdown..."));
+			SessionInterface->DestroySession(NAME_GameSession);
+		}
 	}
+
 	Super::Deinitialize();
 }
 
@@ -98,19 +128,34 @@ void UMultiplayerSessionsSubsystem::Deinitialize()
 
 void UMultiplayerSessionsSubsystem::CreateLobby(const FLobbySettings& LobbySettings)
 {
-	PrintDebugMessage(FString("INSIDE THE CREATE LOBBY!"), false);
+	// Block if still initializing
+	if (bIsInitializing || !bInitializationComplete)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Subsystem still initializing, please wait..."));
+		MultiplayerOnLobbyCreated.Broadcast(false, FLobbyInfo());
+		return;
+	}
+
 	if (!SessionInterface.IsValid())
 	{
 		MultiplayerOnLobbyCreated.Broadcast(false, FLobbyInfo());
 		return;
 	}
 
-	auto ExistingSession = SessionInterface->GetNamedSession(NAME_GameSession);
-	if (ExistingSession != nullptr)
+	// Clean up any existing session before creating new one
+	FNamedOnlineSession* ExistingSession = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (ExistingSession)
 	{
-		bCreateLobbyOnDestroy = true;
+		UE_LOG(LogTemp, Warning, TEXT("Destroying existing session before creating new lobby..."));
+
+		// Store settings for after destruction
 		PendingLobbySettings = LobbySettings;
-		DestroySession();
+		bHasPendingLobbyCreation = true;
+
+		// Destroy and recreate in callback
+		DestroySessionCompleteDelegateHandle = SessionInterface->AddOnDestroySessionCompleteDelegate_Handle(
+			DestroySessionCompleteDelegate);
+		SessionInterface->DestroySession(NAME_GameSession);
 		return;
 	}
 
@@ -177,6 +222,46 @@ void UMultiplayerSessionsSubsystem::FindLobbies(int32 MaxResult)
 
 	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
 	if (!LocalPlayer)
+	{
+		MultiplayerOnLobbyListUpdated.Broadcast(TArray<FLobbyInfo>(), false);
+		return;
+	}
+
+	// Check for stale session from previous failed join/disconnect
+	// If we're not the host of an existing session, destroy it before searching
+	FNamedOnlineSession* ExistingSession = SessionInterface->GetNamedSession(NAME_GameSession);
+	if (ExistingSession)
+	{
+		// Check if we own this session (we're the host)
+		FUniqueNetIdRepl LocalPlayerId = LocalPlayer->GetPreferredUniqueNetId();
+		bool bIsHost = ExistingSession->OwningUserId.IsValid() &&
+			LocalPlayerId.IsValid() &&
+			*LocalPlayerId == *ExistingSession->OwningUserId;
+
+		if (!bIsHost)
+		{
+			// We have a stale client session - clean it up before searching
+			UE_LOG(LogTemp, Warning, TEXT("Found stale client session before search, cleaning up..."));
+
+			// Store search params for after cleanup
+			PendingSearchMaxResults = MaxResult;
+			bHasPendingSearch = true;
+
+			DestroySessionCompleteDelegateHandle = SessionInterface->AddOnDestroySessionCompleteDelegate_Handle(
+				DestroySessionCompleteDelegate);
+			SessionInterface->DestroySession(NAME_GameSession);
+			return;
+		}
+	}
+
+	// Proceed with search
+	PerformFindLobbies(MaxResult);
+}
+
+void UMultiplayerSessionsSubsystem::PerformFindLobbies(int32 MaxResult)
+{
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (!LocalPlayer || !SessionInterface.IsValid())
 	{
 		MultiplayerOnLobbyListUpdated.Broadcast(TArray<FLobbyInfo>(), false);
 		return;
@@ -471,34 +556,51 @@ void UMultiplayerSessionsSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
 		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
 	}
 
-	if (bIsLobbySearch)
+	if (!bWasSuccessful || !LastSessionSearch.IsValid() || LastSessionSearch->SearchResults.Num() <= 0)
 	{
-		bIsLobbySearch = false;
-		if (!bWasSuccessful || !LastSessionSearch.IsValid() || LastSessionSearch->SearchResults.Num() <= 0)
-		{
-			MultiplayerOnLobbyListUpdated.Broadcast(TArray<FLobbyInfo>(), false);
-			return;
-		}
-
-		// Convert to FLobbyInfo array
-		TArray<FLobbyInfo> Lobbies;
-
-		for (const FOnlineSessionSearchResult& Result : LastSessionSearch->SearchResults)
-		{
-			Lobbies.Add(ConvertSearchResultToLobbyInfo(Result));
-		}
-		MultiplayerOnLobbyListUpdated.Broadcast(Lobbies, true);
+		MultiplayerOnLobbyListUpdated.Broadcast(TArray<FLobbyInfo>(), bWasSuccessful);
+		return;
 	}
-	else
+
+	// Convert to FLobbyInfo array
+	TArray<FLobbyInfo> FoundLobbies;
+
+	// Get local player ID to filter out own ghost lobbies
+	// IMPORTANT: We always get the local player ID, not just when we have an active session
+	// This filters out ghost lobbies from previous crashes even after restart
+	FUniqueNetIdRepl LocalPlayerId;
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (LocalPlayer)
 	{
-		if (LastSessionSearch->SearchResults.Num() <= 0)
+		LocalPlayerId = LocalPlayer->GetPreferredUniqueNetId();
+	}
+
+	for (const FOnlineSessionSearchResult& Result : LastSessionSearch->SearchResults)
+	{
+		// Filter out any lobby owned by the local player (ghost session from crash)
+		if (LocalPlayerId.IsValid() && Result.Session.OwningUserId.IsValid())
 		{
-			MultiplayerOnFindSessionsComplete.Broadcast(TArray<FOnlineSessionSearchResult>(), false);
-			return;
+			if (*LocalPlayerId == *Result.Session.OwningUserId)
+			{
+				UE_LOG(LogTemp, Warning,
+				       TEXT("Filtering out own lobby (potential ghost session) from search results: %s"),
+				       *Result.GetSessionIdStr());
+				continue; // Skip this lobby
+			}
 		}
 
-		MultiplayerOnFindSessionsComplete.Broadcast(LastSessionSearch->SearchResults, true);
+		// Additional validation: Skip lobbies with 0 open connections that are full
+		// (could indicate a stale lobby)
+		if (Result.Session.NumOpenPublicConnections <= 0 &&
+			Result.Session.SessionSettings.NumPublicConnections > 0)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Skipping full lobby: %s"), *Result.GetSessionIdStr());
+			// Don't skip - let user see full lobbies, but log it
+		}
+
+		FoundLobbies.Add(ConvertSearchResultToLobbyInfo(Result));
 	}
+	MultiplayerOnLobbyListUpdated.Broadcast(FoundLobbies, true);
 }
 
 void UMultiplayerSessionsSubsystem::OnJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result)
@@ -537,6 +639,25 @@ void UMultiplayerSessionsSubsystem::OnJoinSessionComplete(FName SessionName, EOn
 			FString Address;
 			SessionInterface->GetResolvedConnectString(NAME_GameSession, Address);
 			CachedConnectAddress = Address;
+
+			// Check if the address is empty or invalid (ghost lobby indicator)
+			if (Address.IsEmpty())
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Join succeeded but got empty connect address - possible ghost lobby"));
+				LobbyJoinResult = ELobbyJoinResult::ConnectionFailed;
+
+				// Clean up the invalid session
+				CleanupAfterFailedJoin();
+			}
+		}
+		else if (Result != EOnJoinSessionCompleteResult::Success)
+		{
+			// On join failure, clear search results to force fresh search
+			if (LastSessionSearch.IsValid())
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Join failed, clearing cached search results"));
+				LastSessionSearch->SearchResults.Empty();
+			}
 		}
 
 		MultiplayerOnLobbyJoinComplete.Broadcast(LobbyJoinResult);
@@ -560,24 +681,38 @@ void UMultiplayerSessionsSubsystem::OnDestroySessionComplete(FName SessionName, 
 		SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteDelegateHandle);
 	}
 
-	if (bWasSuccessful)
+	// Handle initialization cleanup
+	if (bIsInitializing)
 	{
-		if (bCreateSessionOnDestroy)
-		{
-			bCreateSessionOnDestroy = false;
-			CreateSession(LastNumPublicConnections, LastMatchType);
-			return;
-		}
-
-		if (bCreateLobbyOnDestroy)
-		{
-			bCreateLobbyOnDestroy = false;
-			CreateLobby(PendingLobbySettings);
-			return;
-		}
+		bIsInitializing = false;
+		bInitializationComplete = true;
+		UE_LOG(LogTemp, Log, TEXT("Ghost session cleanup complete, subsystem ready."));
+		return;
 	}
 
-	MultiplayerOnDestroySessionComplete.Broadcast(bWasSuccessful);
+	// Handle pending lobby creation
+	if (bHasPendingLobbyCreation && bWasSuccessful)
+	{
+		bHasPendingLobbyCreation = false;
+		UE_LOG(LogTemp, Log, TEXT("Ghost session destroyed, creating new lobby..."));
+		CreateLobby(PendingLobbySettings);
+		return;
+	}
+
+	// Handle pending search after stale session cleanup
+	if (bHasPendingSearch && bWasSuccessful)
+	{
+		bHasPendingSearch = false;
+		UE_LOG(LogTemp, Log, TEXT("Stale session destroyed, proceeding with lobby search..."));
+		PerformFindLobbies(PendingSearchMaxResults);
+		return;
+	}
+
+	// Original broadcast
+	if (MultiplayerOnDestroySessionComplete.IsBound())
+	{
+		MultiplayerOnDestroySessionComplete.Broadcast(bWasSuccessful);
+	}
 }
 
 void UMultiplayerSessionsSubsystem::OnStartSessionComplete(FName SessionName, bool bWasSuccessful)
@@ -633,12 +768,24 @@ void UMultiplayerSessionsSubsystem::OnUnregisterPlayerComplete(FName SessionName
 		FUniqueNetIdRepl LocalPlayerId = LocalPlayer->GetPreferredUniqueNetId();
 		if (LocalPlayerId.IsValid() && *LocalPlayerId == PlayerId)
 		{
-			// Local player is being removed
+			// Local player is being removed - clean up local session state
+			UE_LOG(LogTemp, Warning, TEXT("Local player removed from session, cleaning up..."));
+
+			// Clean up the local session to allow joining new lobbies
+			CleanupAfterFailedJoin();
+
 			if (Reason == EOnSessionParticipantLeftReason::Kicked)
 			{
 				// Local player was kicked - notify via dedicated delegate
 				// NOTE: Reason string is empty as it cannot be transmitted from host
 				MultiplayerOnKickedFromLobby.Broadcast(TEXT(""));
+				return;
+			}
+			if (Reason == EOnSessionParticipantLeftReason::Disconnected)
+			{
+				// Local player was disconnected (host crashed/quit)
+				UE_LOG(LogTemp, Warning, TEXT("Disconnected from host session"));
+				MultiplayerOnKickedFromLobby.Broadcast(TEXT("Host disconnected"));
 				return;
 			}
 			// Local player left voluntarily
@@ -936,6 +1083,42 @@ void UMultiplayerSessionsSubsystem::LeaveLobby()
 		// it from the lobby
 		DestroySession();
 	}
+}
+
+void UMultiplayerSessionsSubsystem::CleanupAfterFailedJoin()
+{
+	UE_LOG(LogTemp, Warning, TEXT("Cleaning up session after failed join/travel..."));
+
+	// Clear the cached connect address since it's invalid
+	CachedConnectAddress.Empty();
+
+	// Clear the search results to force a fresh search
+	if (LastSessionSearch.IsValid())
+	{
+		LastSessionSearch->SearchResults.Empty();
+		LastSessionSearch.Reset();
+	}
+
+	// Destroy any local session that may have been created during the failed join
+	if (SessionInterface.IsValid())
+	{
+		FNamedOnlineSession* ExistingSession = SessionInterface->GetNamedSession(NAME_GameSession);
+		if (ExistingSession)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Destroying orphaned session from failed join..."));
+
+			// Silently destroy the session (don't broadcast completion for cleanup)
+			DestroySessionCompleteDelegateHandle = SessionInterface->AddOnDestroySessionCompleteDelegate_Handle(
+				DestroySessionCompleteDelegate);
+
+			SessionInterface->DestroySession(NAME_GameSession);
+		}
+	}
+
+	// Reset lobby state flags
+	bIsLobbyJoin = false;
+	bIsLobbyOperation = false;
+	bIsLobbySearch = false;
 }
 
 /* SESSION HANDLERS */

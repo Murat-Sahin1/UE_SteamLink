@@ -6,14 +6,110 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## Roadmap
+
+### Next: Lobby Level
+
+- **Proper Menu UI Design** - Pleasing menu design
+- **Lobby Level Design** - TBD (dashboard UI vs 3D in-game lobby)
+
+---
+
+## [0.4.0] - 2026-01-14
+
+### Added
+
+- **Ready-Up System** - Complete replicated ready state for lobby players
+  - `ALobbyPlayerState` - Custom PlayerState with replicated `bIsReady`
+    - `SetReadyState()` / `ToggleReadyState()` - Toggle ready status
+    - `IsReady()` - Query ready state
+    - `OnReadyStateChanged` delegate - Local notification
+    - Server RPC for client-to-server state changes
+
+  - `ALobbyGameState` - Custom GameState for lobby queries
+    - `AreAllPlayersReady()` - Check if all players ready
+    - `GetReadyPlayerCount()` / `GetTotalPlayerCount()` - Player counts
+    - `GetLobbyPlayerStates()` - Get all lobby player states
+    - `OnPlayerReadyStateChanged` delegate - Global notification
+
+  - `ALobbyGameMode` updates
+    - Uses `ALobbyPlayerState` and `ALobbyGameState`
+    - `StartGame(GameLevelPath)` - Server travel when all ready
+    - `CanStartGame()` - Query if game can start
+    - `OnAllPlayersReady` / `OnNotAllPlayersReady` / `OnGameStarted` delegates
+
+- **Lobby HUD UI System** - In-lobby player management interface
+  - `ULobbyHUDWidget` (WBP_LobbyHUD) - Main lobby screen HUD
+    - Player list with scrollable display
+    - Ready/Unready toggle button with dynamic text
+    - Start Game button (host-only, enabled when all ready)
+    - Leave Lobby button
+    - Status text showing ready count ("Waiting for players... (2/4 ready)")
+    - Player count display
+    - Periodic refresh (1 second) for late joiners
+    - Binds to GameState ready state changes
+    - `InitializeLobbyHUD()` / `RefreshPlayerList()` / `MenuSetup()` / `MenuTearDown()`
+
+  - `ULobbyPlayerEntryWidget` (WBP_LobbyPlayerEntry) - Player list row
+    - Player name display
+    - Ready status text (Ready / Not Ready)
+    - Host crown indicator (conditional visibility)
+    - Ready checkmark icon (conditional visibility)
+    - Color-coded states: Ready (green), Not Ready (yellow), Local Player (blue highlight)
+    - Automatic updates on ready state changes via delegate binding
+
+- Added `bIsReady` to `FLobbyPlayerInfo` struct
+- Added `NetCore` module dependency for replication support
+
+### Changed
+
+- Moved lobby framework classes from `Source/MenuSystem/` into the plugin
+  - `LobbyGameMode`, `LobbyGameState`, `LobbyPlayerState` now in plugin source
+
+### Fixed
+
+- Removed incorrect `DefaultPawnClass` assignment in LobbyGameMode
+
+### Technical
+
+- Full replication support using `DOREPLIFETIME` and `ReplicatedUsing`
+- Server authoritative ready state with client RPC requests
+- Delegate chain: PlayerState → GameState → GameMode for ready notifications
+- Widget lifecycle: Proper Setup/NativeConstruct/NativeDestruct/NativeTick flow
+
+---
+
+## [0.3.1] - 2026-01-13
+
+### Fixed
+
+- **Ghost Lobby Issue** - Complete fix for stale Steam lobbies after host crash/ALT+F4
+  - Host no longer sees their own ghost lobby after restarting (filter by OwningUserId regardless of active session)
+  - Client session now properly cleaned up when disconnected from host
+  - Stale client sessions automatically destroyed before lobby search
+  - Empty connect address detection triggers automatic cleanup
+  - Search cache invalidated after failed join attempts
+
+### Added
+
+- `CleanupAfterFailedJoin()` - Public method to clean up session state after failed travel
+- `PerformFindLobbies()` - Internal helper for search after stale session cleanup
+- Pending search queue for seamless search after automatic cleanup
+
+### Technical
+
+- `OnUnregisterPlayerComplete` now calls cleanup when local player is removed
+- `FindLobbies` checks for stale non-host sessions before searching
+- `OnJoinSessionComplete` detects empty connect addresses as ghost lobby indicator
+
+---
+
 ## [0.3.0] - 2026-01-12
 
 ### Added
 
 - **Complete Lobby UI System**
-
   - `CreateLobbyWidget` - Configurable lobby creation form
-
     - Max players selection (2-16 via spin box)
     - Public/Private lobby toggle with real-time password field visibility
     - Password input with validation (min 4 characters for private lobbies)
@@ -22,7 +118,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     - Cancel and Create buttons with proper state management
 
   - `LobbyListWidget` - Scrollable lobby browser
-
     - Real-time lobby search and display
     - Refresh button for manual search
     - Loading indicator during search
@@ -31,7 +126,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     - Back button navigation to main menu
 
   - `LobbyEntryWidget` - Individual lobby row display
-
     - Host name, player count (e.g., "3/5"), and ping display
     - Lock icon for private lobbies
     - Hover effects for visual feedback
@@ -47,7 +141,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     - Cancel functionality
 
 - **Menu System Integration**
-
   - WidgetSwitcher-based view management
   - Three distinct views: Main Menu, Create Lobby, Lobby Browser
   - Enum-based view switching for type safety
@@ -93,7 +186,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - **Host Management**
-
   - `UpdateLobbySettings()` - Modify lobby max players, visibility, and password at runtime
   - `SetLobbyVisibility()` - Quick toggle between public/private with optional password
   - `KickPlayer()` - Remove players from lobby with custom reason
@@ -123,7 +215,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Lobby System** - Full lobby implementation with global visibility (no Steam regional restrictions)
 
 - **Data Structures** (`MultiplayerSessionsTypes.h`)
-
   - `FLobbyInfo` - Lobby metadata (ID, host name, player counts, visibility, ping)
   - `FLobbyPlayerInfo` - Player metadata (ID, name, host status)
   - `FLobbySettings` - Lobby configuration (max players, visibility, password)
@@ -131,7 +222,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `ELobbyLeaveReason` - Player leave reasons
 
 - **Lobby Delegates**
-
   - `MultiplayerOnLobbyCreated` - Lobby creation result
   - `MultiplayerOnLobbyListUpdated` - Lobby search results
   - `MultiplayerOnLobbyJoinComplete` - Join attempt result
@@ -142,13 +232,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `MultiplayerOnLobbySettingsUpdated` - Settings modified event
 
 - **Lobby Operations**
-
   - `CreateLobby()` - Create lobby with global visibility and optional password protection
   - `FindLobbies()` - Search for lobbies globally (not restricted to Steam friends/region)
   - `JoinLobby()` - Join lobby with password validation
 
 - **Lobby Query Methods**
-
   - `GetCurrentLobbyInfo()` - Get current lobby metadata
   - `GetLobbyPlayers()` - Get all players in lobby
   - `IsLobbyHost()` - Check if local player is host
@@ -172,7 +260,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - **Session System** (Legacy)
-
   - `CreateSession()` - Create online session
   - `FindSessions()` - Search for sessions
   - `JoinSession()` - Join a session
@@ -180,7 +267,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `StartSession()` - Start the session
 
 - **Session Delegates**
-
   - `MultiplayerOnCreateSessionComplete`
   - `MultiplayerOnFindSessionsComplete`
   - `MultiplayerOnJoinSessionComplete`
